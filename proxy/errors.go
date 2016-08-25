@@ -5,7 +5,7 @@ import (
 )
 
 var (
-	InvalidAuthentication  = errors.New("Invalid authentication.")
-	InvalidProtocolVersion = errors.New("Invalid protocol version.")
-	ErrorAlreadyListening  = errors.New("Already listening on another port.")
+	ErrInvalidAuthentication  = errors.New("Invalid authentication.")
+	ErrInvalidProtocolVersion = errors.New("Invalid protocol version.")
+	ErrAlreadyListening       = errors.New("Already listening on another port.")
 )

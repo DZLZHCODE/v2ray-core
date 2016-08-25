@@ -2,92 +2,102 @@ package rules
 
 import (
 	"errors"
-	"time"
 
-	"github.com/v2ray/v2ray-core/app/router"
-	"github.com/v2ray/v2ray-core/common/collect"
-	v2net "github.com/v2ray/v2ray-core/common/net"
+	"v2ray.com/core/app"
+	"v2ray.com/core/app/dns"
+	"v2ray.com/core/app/router"
+	"v2ray.com/core/common/log"
+	v2net "v2ray.com/core/common/net"
 )
 
 var (
-	InvalidRule      = errors.New("Invalid Rule")
-	NoRuleApplicable = errors.New("No rule applicable")
+	ErrInvalidRule      = errors.New("Invalid Rule")
+	ErrNoRuleApplicable = errors.New("No rule applicable")
 )
 
-type cacheEntry struct {
-	tag        string
-	err        error
-	validUntil time.Time
-}
-
-func newCacheEntry(tag string, err error) *cacheEntry {
-	this := &cacheEntry{
-		tag: tag,
-		err: err,
-	}
-	this.Extend()
-	return this
-}
-
-func (this *cacheEntry) IsValid() bool {
-	return this.validUntil.Before(time.Now())
-}
-
-func (this *cacheEntry) Extend() {
-	this.validUntil = time.Now().Add(time.Hour)
-}
-
 type Router struct {
-	rules []*Rule
-	cache *collect.ValidityMap
+	config    *RouterRuleConfig
+	cache     *RoutingTable
+	dnsServer dns.Server
 }
 
-func NewRouter() *Router {
-	return &Router{
-		rules: make([]*Rule, 0, 16),
-		cache: collect.NewValidityMap(3600),
+func NewRouter(config *RouterRuleConfig, space app.Space) *Router {
+	r := &Router{
+		config: config,
+		cache:  NewRoutingTable(),
 	}
+	space.InitializeApplication(func() error {
+		if !space.HasApp(dns.APP_ID) {
+			log.Error("DNS: Router is not found in the space.")
+			return app.ErrMissingApplication
+		}
+		r.dnsServer = space.GetApp(dns.APP_ID).(dns.Server)
+		return nil
+	})
+	return r
 }
 
-func (this *Router) AddRule(rule *Rule) *Router {
-	this.rules = append(this.rules, rule)
-	return this
+func (this *Router) Release() {
+
+}
+
+// Private: Visible for testing.
+func (this *Router) ResolveIP(dest v2net.Destination) []v2net.Destination {
+	ips := this.dnsServer.Get(dest.Address().Domain())
+	if len(ips) == 0 {
+		return nil
+	}
+	dests := make([]v2net.Destination, len(ips))
+	for idx, ip := range ips {
+		if dest.IsTCP() {
+			dests[idx] = v2net.TCPDestination(v2net.IPAddress(ip), dest.Port())
+		} else {
+			dests[idx] = v2net.UDPDestination(v2net.IPAddress(ip), dest.Port())
+		}
+	}
+	return dests
 }
 
 func (this *Router) takeDetourWithoutCache(dest v2net.Destination) (string, error) {
-	for _, rule := range this.rules {
+	for _, rule := range this.config.Rules {
 		if rule.Apply(dest) {
 			return rule.Tag, nil
 		}
 	}
-	return "", NoRuleApplicable
+	if this.config.DomainStrategy == UseIPIfNonMatch && dest.Address().Family().IsDomain() {
+		log.Info("Router: Looking up IP for ", dest)
+		ipDests := this.ResolveIP(dest)
+		if ipDests != nil {
+			for _, ipDest := range ipDests {
+				log.Info("Router: Trying IP ", ipDest)
+				for _, rule := range this.config.Rules {
+					if rule.Apply(ipDest) {
+						return rule.Tag, nil
+					}
+				}
+			}
+		}
+	}
+
+	return "", ErrNoRuleApplicable
 }
 
 func (this *Router) TakeDetour(dest v2net.Destination) (string, error) {
-	rawEntry := this.cache.Get(dest)
-	if rawEntry == nil {
+	destStr := dest.String()
+	found, tag, err := this.cache.Get(destStr)
+	if !found {
 		tag, err := this.takeDetourWithoutCache(dest)
-		this.cache.Set(dest, newCacheEntry(tag, err))
+		this.cache.Set(destStr, tag, err)
 		return tag, err
 	}
-	entry := rawEntry.(*cacheEntry)
-	return entry.tag, entry.err
+	return tag, err
 }
 
 type RouterFactory struct {
 }
 
-func (this *RouterFactory) Create(rawConfig interface{}) (router.Router, error) {
-	config := rawConfig.(*RouterRuleConfig)
-	rules := config.Rules()
-	router := NewRouter()
-	for _, rule := range rules {
-		if rule == nil {
-			return nil, InvalidRule
-		}
-		router.AddRule(rule)
-	}
-	return router, nil
+func (this *RouterFactory) Create(rawConfig interface{}, space app.Space) (router.Router, error) {
+	return NewRouter(rawConfig.(*RouterRuleConfig), space), nil
 }
 
 func init() {

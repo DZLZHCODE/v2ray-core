@@ -4,16 +4,17 @@ package core
 import (
 	"fmt"
 
-	"github.com/v2ray/v2ray-core/common/platform"
+	"v2ray.com/core/common/platform"
 )
 
 var (
-	version  = "1.6"
+	version  = "2.1"
 	build    = "Custom"
-	codename = "New Order"
+	codename = "One for all"
 	intro    = "An unified platform for anti-censorship."
 )
 
+// Version returns V2Ray's version as a string.
 func Version() string {
 	return version
 }

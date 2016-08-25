@@ -4,24 +4,25 @@ import (
 	"net"
 	"testing"
 
-	v2nettesting "github.com/v2ray/v2ray-core/common/net/testing"
-	_ "github.com/v2ray/v2ray-core/proxy/freedom"
-	"github.com/v2ray/v2ray-core/shell/point"
-	v2testing "github.com/v2ray/v2ray-core/testing"
-	"github.com/v2ray/v2ray-core/testing/assert"
-	"github.com/v2ray/v2ray-core/testing/servers/tcp"
-	"github.com/v2ray/v2ray-core/testing/servers/udp"
+	"v2ray.com/core/app"
+	"v2ray.com/core/app/dispatcher"
+	dispatchers "v2ray.com/core/app/dispatcher/impl"
+	"v2ray.com/core/app/proxyman"
+	"v2ray.com/core/common/dice"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/proxy"
+	. "v2ray.com/core/proxy/dokodemo"
+	"v2ray.com/core/proxy/freedom"
+	"v2ray.com/core/testing/assert"
+	"v2ray.com/core/testing/servers/tcp"
+	"v2ray.com/core/testing/servers/udp"
+	"v2ray.com/core/transport/internet"
 )
 
 func TestDokodemoTCP(t *testing.T) {
-	v2testing.Current(t)
-
-	port := v2nettesting.PickPort()
-
-	data2Send := "Data to be sent to remote."
+	assert := assert.On(t)
 
 	tcpServer := &tcp.Server{
-		Port: port,
 		MsgProcessor: func(data []byte) []byte {
 			buffer := make([]byte, 0, 2048)
 			buffer = append(buffer, []byte("Processed: ")...)
@@ -32,33 +33,48 @@ func TestDokodemoTCP(t *testing.T) {
 	_, err := tcpServer.Start()
 	assert.Error(err).IsNil()
 
-	pointPort := v2nettesting.PickPort()
-	config := &point.Config{
-		Port: pointPort,
-		InboundConfig: &point.ConnectionConfig{
-			Protocol: "dokodemo-door",
-			Settings: []byte(`{
-        "address": "127.0.0.1",
-        "port": ` + port.String() + `,
-        "network": "tcp",
-        "timeout": 0
-      }`),
-		},
-		OutboundConfig: &point.ConnectionConfig{
-			Protocol: "freedom",
-			Settings: nil,
-		},
-	}
+	defer tcpServer.Close()
 
-	point, err := point.NewPoint(config)
-	assert.Error(err).IsNil()
+	space := app.NewSpace()
+	space.BindApp(dispatcher.APP_ID, dispatchers.NewDefaultDispatcher(space))
+	ohm := proxyman.NewDefaultOutboundHandlerManager()
+	ohm.SetDefaultHandler(
+		freedom.NewFreedomConnection(
+			&freedom.Config{},
+			space,
+			&proxy.OutboundHandlerMeta{
+				Address: v2net.LocalHostIP,
+				StreamSettings: &internet.StreamSettings{
+					Type: internet.StreamConnectionTypeRawTCP,
+				},
+			}))
+	space.BindApp(proxyman.APP_ID_OUTBOUND_MANAGER, ohm)
 
-	err = point.Start()
+	data2Send := "Data to be sent to remote."
+
+	port := v2net.Port(dice.Roll(20000) + 10000)
+	dokodemo := NewDokodemoDoor(&Config{
+		Address: v2net.LocalHostIP,
+		Port:    tcpServer.Port,
+		Network: v2net.TCPNetwork.AsList(),
+		Timeout: 600,
+	}, space, &proxy.InboundHandlerMeta{
+		Address: v2net.LocalHostIP,
+		Port:    port,
+		StreamSettings: &internet.StreamSettings{
+			Type: internet.StreamConnectionTypeRawTCP,
+		}})
+	defer dokodemo.Close()
+
+	assert.Error(space.Initialize()).IsNil()
+
+	err = dokodemo.Start()
 	assert.Error(err).IsNil()
+	assert.Port(port).Equals(dokodemo.Port())
 
 	tcpClient, err := net.DialTCP("tcp", nil, &net.TCPAddr{
 		IP:   []byte{127, 0, 0, 1},
-		Port: int(pointPort),
+		Port: int(port),
 		Zone: "",
 	})
 	assert.Error(err).IsNil()
@@ -71,18 +87,13 @@ func TestDokodemoTCP(t *testing.T) {
 	assert.Error(err).IsNil()
 	tcpClient.Close()
 
-	assert.StringLiteral("Processed: " + data2Send).Equals(string(response[:nBytes]))
+	assert.String("Processed: " + data2Send).Equals(string(response[:nBytes]))
 }
 
 func TestDokodemoUDP(t *testing.T) {
-	v2testing.Current(t)
-
-	port := v2nettesting.PickPort()
-
-	data2Send := "Data to be sent to remote."
+	assert := assert.On(t)
 
 	udpServer := &udp.Server{
-		Port: port,
 		MsgProcessor: func(data []byte) []byte {
 			buffer := make([]byte, 0, 2048)
 			buffer = append(buffer, []byte("Processed: ")...)
@@ -93,43 +104,57 @@ func TestDokodemoUDP(t *testing.T) {
 	_, err := udpServer.Start()
 	assert.Error(err).IsNil()
 
-	pointPort := v2nettesting.PickPort()
-	config := &point.Config{
-		Port: pointPort,
-		InboundConfig: &point.ConnectionConfig{
-			Protocol: "dokodemo-door",
-			Settings: []byte(`{
-        "address": "127.0.0.1",
-        "port": ` + port.String() + `,
-        "network": "udp",
-        "timeout": 0
-      }`),
-		},
-		OutboundConfig: &point.ConnectionConfig{
-			Protocol: "freedom",
-			Settings: nil,
-		},
-	}
+	defer udpServer.Close()
 
-	point, err := point.NewPoint(config)
-	assert.Error(err).IsNil()
+	space := app.NewSpace()
+	space.BindApp(dispatcher.APP_ID, dispatchers.NewDefaultDispatcher(space))
+	ohm := proxyman.NewDefaultOutboundHandlerManager()
+	ohm.SetDefaultHandler(
+		freedom.NewFreedomConnection(
+			&freedom.Config{},
+			space,
+			&proxy.OutboundHandlerMeta{
+				Address: v2net.AnyIP,
+				StreamSettings: &internet.StreamSettings{
+					Type: internet.StreamConnectionTypeRawTCP,
+				}}))
+	space.BindApp(proxyman.APP_ID_OUTBOUND_MANAGER, ohm)
 
-	err = point.Start()
+	data2Send := "Data to be sent to remote."
+
+	port := v2net.Port(dice.Roll(20000) + 10000)
+	dokodemo := NewDokodemoDoor(&Config{
+		Address: v2net.LocalHostIP,
+		Port:    udpServer.Port,
+		Network: v2net.UDPNetwork.AsList(),
+		Timeout: 600,
+	}, space, &proxy.InboundHandlerMeta{
+		Address: v2net.LocalHostIP,
+		Port:    port,
+		StreamSettings: &internet.StreamSettings{
+			Type: internet.StreamConnectionTypeRawTCP,
+		}})
+	defer dokodemo.Close()
+
+	assert.Error(space.Initialize()).IsNil()
+
+	err = dokodemo.Start()
 	assert.Error(err).IsNil()
+	assert.Port(port).Equals(dokodemo.Port())
 
 	udpClient, err := net.DialUDP("udp", nil, &net.UDPAddr{
 		IP:   []byte{127, 0, 0, 1},
-		Port: int(pointPort),
+		Port: int(port),
 		Zone: "",
 	})
 	assert.Error(err).IsNil()
+	defer udpClient.Close()
 
 	udpClient.Write([]byte(data2Send))
 
 	response := make([]byte, 1024)
-	nBytes, err := udpClient.Read(response)
+	nBytes, addr, err := udpClient.ReadFromUDP(response)
 	assert.Error(err).IsNil()
-	udpClient.Close()
-
-	assert.StringLiteral("Processed: " + data2Send).Equals(string(response[:nBytes]))
+	assert.IP(addr.IP).Equals(v2net.LocalHostIP.IP())
+	assert.Bytes(response[:nBytes]).Equals([]byte("Processed: " + data2Send))
 }

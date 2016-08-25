@@ -7,14 +7,15 @@ rand_str () {
 }
 
 ID="$(rand_str 8)-$(rand_str 4)-$(rand_str 4)-$(rand_str 4)-$(rand_str 12)"
+echo "Generated client ID: $ID"
 
 cat <<EOF > server-cfg.json
 {
-  "port": $PORT,
   "log" : {
     "access": "/go/access.log"
   },
   "inbound": {
+    "port": $PORT,
     "protocol": "vmess",
     "settings": {
       "clients": [

@@ -3,7 +3,7 @@ package tcp
 import (
 	"net/http"
 
-	v2net "github.com/v2ray/v2ray-core/common/net"
+	v2net "v2ray.com/core/common/net"
 )
 
 type Server struct {
@@ -27,8 +27,8 @@ func (server *Server) ServeHTTP(resp http.ResponseWriter, req *http.Request) {
 }
 
 func (server *Server) Start() (v2net.Destination, error) {
-	go http.ListenAndServe(":"+server.Port.String(), server)
-	return v2net.TCPDestination(v2net.IPAddress([]byte{127, 0, 0, 1}), v2net.Port(server.Port)), nil
+	go http.ListenAndServe("127.0.0.1:"+server.Port.String(), server)
+	return v2net.TCPDestination(v2net.LocalHostIP, v2net.Port(server.Port)), nil
 }
 
 func (this *Server) Close() {

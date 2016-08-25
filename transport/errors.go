@@ -5,5 +5,5 @@ import (
 )
 
 var (
-	CorruptedPacket = errors.New("Packet is corrupted.")
+	ErrCorruptedPacket = errors.New("Packet is corrupted.")
 )

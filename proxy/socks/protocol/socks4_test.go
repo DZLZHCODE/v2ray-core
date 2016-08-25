@@ -4,15 +4,13 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/v2ray/v2ray-core/common/alloc"
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	v2netassert "github.com/v2ray/v2ray-core/common/net/testing/assert"
-	v2testing "github.com/v2ray/v2ray-core/testing"
-	"github.com/v2ray/v2ray-core/testing/assert"
+	"v2ray.com/core/common/alloc"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/testing/assert"
 )
 
 func TestSocks4AuthenticationRequestRead(t *testing.T) {
-	v2testing.Current(t)
+	assert := assert.On(t)
 
 	rawRequest := []byte{
 		0x04, // version
@@ -22,18 +20,18 @@ func TestSocks4AuthenticationRequestRead(t *testing.T) {
 	}
 	_, request4, err := ReadAuthentication(bytes.NewReader(rawRequest))
 	assert.Error(err).Equals(Socks4Downgrade)
-	assert.Byte(request4.Version).Named("Version").Equals(0x04)
-	assert.Byte(request4.Command).Named("Command").Equals(0x01)
-	v2netassert.Port(request4.Port).Named("Port").Equals(v2net.Port(53))
-	assert.Bytes(request4.IP[:]).Named("IP").Equals([]byte{0x72, 0x72, 0x72, 0x72})
+	assert.Byte(request4.Version).Equals(0x04)
+	assert.Byte(request4.Command).Equals(0x01)
+	assert.Port(request4.Port).Equals(v2net.Port(53))
+	assert.Bytes(request4.IP[:]).Equals([]byte{0x72, 0x72, 0x72, 0x72})
 }
 
 func TestSocks4AuthenticationResponseToBytes(t *testing.T) {
-	v2testing.Current(t)
+	assert := assert.On(t)
 
 	response := NewSocks4AuthenticationResponse(byte(0x10), 443, []byte{1, 2, 3, 4})
 
-	buffer := alloc.NewSmallBuffer().Clear()
+	buffer := alloc.NewLocalBuffer(2048).Clear()
 	defer buffer.Release()
 
 	response.Write(buffer)

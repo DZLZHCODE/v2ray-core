@@ -3,9 +3,9 @@ package rules
 import (
 	"net"
 	"regexp"
+	"strings"
 
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	"github.com/v2ray/v2ray-core/common/serial"
+	v2net "v2ray.com/core/common/net"
 )
 
 type Condition interface {
@@ -63,21 +63,21 @@ func (this *AnyCondition) Len() int {
 }
 
 type PlainDomainMatcher struct {
-	pattern serial.StringLiteral
+	pattern string
 }
 
 func NewPlainDomainMatcher(pattern string) *PlainDomainMatcher {
 	return &PlainDomainMatcher{
-		pattern: serial.StringLiteral(pattern),
+		pattern: pattern,
 	}
 }
 
 func (this *PlainDomainMatcher) Apply(dest v2net.Destination) bool {
-	if !dest.Address().IsDomain() {
+	if !dest.Address().Family().IsDomain() {
 		return false
 	}
-	domain := serial.StringLiteral(dest.Address().Domain())
-	return domain.Contains(this.pattern)
+	domain := dest.Address().Domain()
+	return strings.Contains(domain, this.pattern)
 }
 
 type RegexpDomainMatcher struct {
@@ -95,11 +95,11 @@ func NewRegexpDomainMatcher(pattern string) (*RegexpDomainMatcher, error) {
 }
 
 func (this *RegexpDomainMatcher) Apply(dest v2net.Destination) bool {
-	if !dest.Address().IsDomain() {
+	if !dest.Address().Family().IsDomain() {
 		return false
 	}
-	domain := serial.StringLiteral(dest.Address().Domain())
-	return this.pattern.MatchString(domain.ToLower().String())
+	domain := dest.Address().Domain()
+	return this.pattern.MatchString(strings.ToLower(domain))
 }
 
 type CIDRMatcher struct {
@@ -117,7 +117,7 @@ func NewCIDRMatcher(ipnet string) (*CIDRMatcher, error) {
 }
 
 func (this *CIDRMatcher) Apply(dest v2net.Destination) bool {
-	if !dest.Address().IsIPv4() && !dest.Address().IsIPv6() {
+	if !dest.Address().Family().Either(v2net.AddressFamilyIPv4, v2net.AddressFamilyIPv6) {
 		return false
 	}
 	return this.cidr.Contains(dest.Address().IP())
@@ -134,7 +134,7 @@ func NewIPv4Matcher(ipnet *v2net.IPNet) *IPv4Matcher {
 }
 
 func (this *IPv4Matcher) Apply(dest v2net.Destination) bool {
-	if !dest.Address().IsIPv4() {
+	if !dest.Address().Family().Either(v2net.AddressFamilyIPv4) {
 		return false
 	}
 	return this.ipv4net.Contains(dest.Address().IP())
@@ -165,5 +165,5 @@ func NewNetworkMatcher(network *v2net.NetworkList) *NetworkMatcher {
 }
 
 func (this *NetworkMatcher) Apply(dest v2net.Destination) bool {
-	return this.network.HasNetwork(v2net.Network(dest.Network()))
+	return this.network.HasNetwork(dest.Network())
 }

@@ -1,14 +1,12 @@
 package dns
 
 import (
-	"github.com/v2ray/v2ray-core/common/serial"
+	"net"
+
+	v2net "v2ray.com/core/common/net"
 )
 
-type CacheConfig struct {
-	TrustedTags map[serial.StringLiteral]bool
-}
-
-func (this *CacheConfig) IsTrustedSource(tag serial.StringLiteral) bool {
-	_, found := this.TrustedTags[tag]
-	return found
+type Config struct {
+	Hosts       map[string]net.IP
+	NameServers []v2net.Destination
 }

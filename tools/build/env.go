@@ -10,6 +10,7 @@ const (
 	Windows   = GoOS("windows")
 	MacOS     = GoOS("darwin")
 	Linux     = GoOS("linux")
+	FreeBSD   = GoOS("freebsd")
 	UnknownOS = GoOS("unknown")
 )
 
@@ -20,6 +21,7 @@ const (
 	Amd64       = GoArch("amd64")
 	Arm         = GoArch("arm")
 	Arm64       = GoArch("arm64")
+	Mips64      = GoArch("mips64")
 	UnknownArch = GoArch("unknown")
 )
 
@@ -33,6 +35,9 @@ func parseOS(rawOS string) GoOS {
 	}
 	if osStr == "linux" || osStr == "debian" || osStr == "ubuntu" || osStr == "redhat" || osStr == "centos" {
 		return Linux
+	}
+	if osStr == "freebsd" {
+		return FreeBSD
 	}
 	return UnknownOS
 }
@@ -50,6 +55,9 @@ func parseArch(rawArch string) GoArch {
 	}
 	if archStr == "arm64" {
 		return Arm64
+	}
+	if archStr == "mips" || archStr == "mips64" {
+		return Mips64
 	}
 	return UnknownArch
 }
@@ -76,8 +84,18 @@ func getSuffix(os GoOS, arch GoArch) string {
 			suffix = "-linux-arm"
 		case Arm64:
 			suffix = "-linux-arm64"
+		case Mips64:
+			suffix = "-linux-mips64"
 		}
-
+	case FreeBSD:
+		switch arch {
+		case X86:
+			suffix = "-freebsd-32"
+		case Amd64:
+			suffix = "-freebsd-64"
+		case Arm:
+			suffix = "-freebsd-arm"
+		}
 	}
 	return suffix
 }

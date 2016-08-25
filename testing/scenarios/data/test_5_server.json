@@ -1,6 +1,7 @@
 {
   "port": 50041,
   "inbound": {
+    "listen": "127.0.0.1",
     "protocol": "vmess",
     "settings": {
       "clients": [
@@ -15,5 +16,24 @@
   "outbound": {
     "protocol": "freedom",
     "settings": {}
+  },
+  "outboundDetour": [{
+    "protocol": "blackhole",
+    "settings": {
+      "response": {
+        "type": "http"
+      }
+    },
+    "tag": "blocked"
+  }],
+  "routing": {
+    "strategy": "rules",
+    "settings": {
+      "rules": [{
+        "type": "field",
+        "port": "50049",
+        "outboundTag": "blocked"
+      }]
+    }
   }
 }

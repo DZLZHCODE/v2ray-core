@@ -1,15 +1,22 @@
 # Project V2Ray
 
-[![Join the chat at https://gitter.im/v2ray/v2ray-core](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/v2ray/v2ray-core?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-[![Build Status](https://travis-ci.org/v2ray/v2ray-core.svg?branch=master)](https://travis-ci.org/v2ray/v2ray-core)
-[![Coverage Status](https://coveralls.io/repos/v2ray/v2ray-core/badge.svg?branch=master&service=github)](https://coveralls.io/github/v2ray/v2ray-core?branch=master)
-[![GoDoc](https://godoc.org/github.com/v2ray/v2ray-core?status.svg)](https://godoc.org/github.com/v2ray/v2ray-core)
+[![Build Status][1]][2] [![codecov.io][3]][4] [![Go Report][5]][6] [![GoDoc][7]][8] [![codebeat][9]][10]
+[1]: https://travis-ci.org/v2ray/v2ray-core.svg?branch=master "Build Status badge"
+[2]: https://travis-ci.org/v2ray/v2ray-core "Travis-CI Build Status"
+[3]: https://codecov.io/github/v2ray/v2ray-core/coverage.svg?branch=master "Coverage badge"
+[4]: https://codecov.io/github/v2ray/v2ray-core?branch=master "Codecov Status"
+[5]: https://goreportcard.com/badge/v2ray.com/core "Go Report badge"
+[6]: https://goreportcard.com/report/v2ray.com/core "Go Report"
+[7]: https://godoc.org/v2ray.com/core?status.svg "GoDoc badge"
+[8]: https://godoc.org/v2ray.com/core "GoDoc"
+[9]: https://codebeat.co/badges/f2354ca8-3e24-463d-a2e3-159af73b2477 "Codebeat badge"
+[10]: https://codebeat.co/projects/github-com-v2ray-v2ray-core "Codebeat"
 
 V2Ray 是一个模块化的代理软件包，它的目标是提供常用的代理软件模块，简化网络代理软件的开发。
 
-[官方网站](https://www.v2ray.com/) | [Wiki](https://github.com/v2ray/v2ray.github.io/wiki)
+[官方网站](https://www.v2ray.com/)
 
-V2Ray provides building blocks for network proxy development. Read our [Wiki](https://github.com/v2ray/v2ray.github.io/wiki/en-us:Home) for more information.
+V2Ray provides building blocks for network proxy development. Read our [Wiki](https://www.v2ray.com/en/index.html) for more information.
 
 ## License
 [The MIT License (MIT)](https://raw.githubusercontent.com/v2ray/v2ray-core/master/LICENSE)

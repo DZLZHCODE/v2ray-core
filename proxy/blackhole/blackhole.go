@@ -1,38 +1,49 @@
 package blackhole
 
 import (
-	"io/ioutil"
-
-	"github.com/v2ray/v2ray-core/app"
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	"github.com/v2ray/v2ray-core/proxy"
-	"github.com/v2ray/v2ray-core/proxy/internal"
-	"github.com/v2ray/v2ray-core/transport/ray"
+	"v2ray.com/core/app"
+	"v2ray.com/core/common/alloc"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/proxy"
+	"v2ray.com/core/proxy/registry"
+	"v2ray.com/core/transport/internet"
+	"v2ray.com/core/transport/ray"
 )
 
 // BlackHole is an outbound connection that sliently swallow the entire payload.
 type BlackHole struct {
+	meta     *proxy.OutboundHandlerMeta
+	response Response
 }
 
-func NewBlackHole() *BlackHole {
-	return &BlackHole{}
+func NewBlackHole(space app.Space, config *Config, meta *proxy.OutboundHandlerMeta) *BlackHole {
+	return &BlackHole{
+		meta:     meta,
+		response: config.Response,
+	}
 }
 
-func (this *BlackHole) Dispatch(firstPacket v2net.Packet, ray ray.OutboundRay) error {
-	if chunk := firstPacket.Chunk(); chunk != nil {
-		chunk.Release()
-	}
+func (this *BlackHole) Dispatch(destination v2net.Destination, payload *alloc.Buffer, ray ray.OutboundRay) error {
+	payload.Release()
 
-	close(ray.OutboundOutput())
-	if firstPacket.MoreChunks() {
-		v2net.ChanToWriter(ioutil.Discard, ray.OutboundInput())
-	}
+	this.response.WriteTo(ray.OutboundOutput())
+	ray.OutboundOutput().Close()
+
+	ray.OutboundInput().Release()
+
 	return nil
 }
 
+type Factory struct{}
+
+func (this *Factory) StreamCapability() internet.StreamConnectionType {
+	return internet.StreamConnectionTypeRawTCP
+}
+
+func (this *Factory) Create(space app.Space, config interface{}, meta *proxy.OutboundHandlerMeta) (proxy.OutboundHandler, error) {
+	return NewBlackHole(space, config.(*Config), meta), nil
+}
+
 func init() {
-	internal.MustRegisterOutboundHandlerCreator("blackhole",
-		func(space app.Space, config interface{}) (proxy.OutboundHandler, error) {
-			return NewBlackHole(), nil
-		})
+	registry.MustRegisterOutboundHandlerCreator("blackhole", new(Factory))
 }

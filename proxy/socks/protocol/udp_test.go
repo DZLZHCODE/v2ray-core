@@ -3,25 +3,23 @@ package protocol
 import (
 	"testing"
 
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	netassert "github.com/v2ray/v2ray-core/common/net/testing/assert"
-	v2testing "github.com/v2ray/v2ray-core/testing"
-	"github.com/v2ray/v2ray-core/testing/assert"
-	"github.com/v2ray/v2ray-core/transport"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/testing/assert"
+	"v2ray.com/core/transport"
 )
 
-func TestSingleByteRequest(t *testing.T) {
-	v2testing.Current(t)
+func TestSingleByteUDPRequest(t *testing.T) {
+	assert := assert.On(t)
 
 	request, err := ReadUDPRequest(make([]byte, 1))
 	if request != nil {
 		t.Fail()
 	}
-	assert.Error(err).Equals(transport.CorruptedPacket)
+	assert.Error(err).Equals(transport.ErrCorruptedPacket)
 }
 
 func TestDomainAddressRequest(t *testing.T) {
-	v2testing.Current(t)
+	assert := assert.On(t)
 
 	payload := make([]byte, 0, 1024)
 	payload = append(payload, 0, 0, 1, AddrTypeDomain, byte(len("v2ray.com")))
@@ -33,7 +31,7 @@ func TestDomainAddressRequest(t *testing.T) {
 	assert.Error(err).IsNil()
 
 	assert.Byte(request.Fragment).Equals(1)
-	assert.String(request.Address).Equals("v2ray.com")
-	netassert.Port(request.Port).Equals(v2net.Port(80))
+	assert.Address(request.Address).EqualsString("v2ray.com")
+	assert.Port(request.Port).Equals(v2net.Port(80))
 	assert.Bytes(request.Data.Value).Equals([]byte("Actual payload"))
 }

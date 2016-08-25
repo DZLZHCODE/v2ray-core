@@ -1,6 +1,7 @@
 {
   "port": 50010,
   "inbound": {
+    "listen": "127.0.0.1",
     "protocol": "socks",
     "settings": {
       "auth": "noauth",
@@ -25,6 +26,7 @@
   "inboundDetour": [
     {
       "protocol": "dokodemo-door",
+      "listen": "127.0.0.1",
       "port": "50011-50015",
       "settings": {
         "address": "127.0.0.1",

@@ -4,37 +4,25 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	"github.com/v2ray/v2ray-core/proxy/internal/config"
+	"v2ray.com/core/proxy/registry"
 )
 
+// UnmarshalJSON implements json.Unmarshaler
 func (this *Config) UnmarshalJSON(data []byte) error {
 	type JsonConfig struct {
-		Hosts []v2net.AddressJson `json:"ownHosts"`
+		Timeout int `json:"timeout"`
 	}
 	jsonConfig := new(JsonConfig)
 	if err := json.Unmarshal(data, jsonConfig); err != nil {
-		return err
+		return errors.New("HTTP: Failed to parse config: " + err.Error())
 	}
-	this.OwnHosts = make([]v2net.Address, len(jsonConfig.Hosts), len(jsonConfig.Hosts)+1)
-	for idx, host := range jsonConfig.Hosts {
-		this.OwnHosts[idx] = host.Address
-	}
-
-	v2rayHost := v2net.DomainAddress("local.v2ray.com")
-	if !this.IsOwnHost(v2rayHost) {
-		this.OwnHosts = append(this.OwnHosts, v2rayHost)
-	}
+	this.Timeout = jsonConfig.Timeout
 
 	return nil
 }
 
 func init() {
-	config.RegisterInboundConfig("http",
-		func(data []byte) (interface{}, error) {
-			rawConfig := new(Config)
-			err := json.Unmarshal(data, rawConfig)
-			return rawConfig, err
-		})
+	registry.RegisterInboundConfig("http", func() interface{} { return new(Config) })
 }

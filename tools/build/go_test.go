@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,24 +10,25 @@ import (
 	"testing"
 	"time"
 
-	v2testing "github.com/v2ray/v2ray-core/testing"
-	"github.com/v2ray/v2ray-core/testing/assert"
+	"v2ray.com/core/testing/assert"
 )
 
 func TestBuildAndRun(t *testing.T) {
-	v2testing.Current(t)
+	assert := assert.On(t)
 
 	gopath := os.Getenv("GOPATH")
-	target := filepath.Join(gopath, "src", "v2ray_test")
-	fmt.Println(target)
 	goOS := parseOS(runtime.GOOS)
 	goArch := parseArch(runtime.GOARCH)
+	target := filepath.Join(gopath, "src", "v2ray_test")
+	if goOS == Windows {
+		target += ".exe"
+	}
 	err := buildV2Ray(target, "v1.0", goOS, goArch)
 	assert.Error(err).IsNil()
 
 	outBuffer := bytes.NewBuffer(make([]byte, 0, 1024))
 	errBuffer := bytes.NewBuffer(make([]byte, 0, 1024))
-	configFile := filepath.Join(gopath, "src", "github.com", "v2ray", "v2ray-core", "release", "config", "vpoint_socks_vmess.json")
+	configFile := filepath.Join(gopath, "src", "github.com", "v2ray", "v2ray-core", "tools", "release", "config", "vpoint_socks_vmess.json")
 	cmd := exec.Command(target, "--config="+configFile)
 	cmd.Stdout = outBuffer
 	cmd.Stderr = errBuffer
@@ -41,7 +41,7 @@ func TestBuildAndRun(t *testing.T) {
 	errStr := string(errBuffer.Bytes())
 
 	assert.Bool(strings.Contains(outStr, "v1.0")).IsTrue()
-	assert.StringLiteral(errStr).Equals("")
+	assert.String(errStr).Equals("")
 
 	os.Remove(target)
 }

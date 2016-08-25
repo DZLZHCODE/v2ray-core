@@ -1,7 +1,7 @@
 #!/bin/bash
 
-GO_AMD64=https://storage.googleapis.com/golang/go1.5.3.linux-amd64.tar.gz
-GO_X86=https://storage.googleapis.com/golang/go1.5.3.linux-386.tar.gz
+GO_AMD64=https://storage.googleapis.com/golang/go1.6.2.linux-amd64.tar.gz
+GO_X86=https://storage.googleapis.com/golang/go1.6.2.linux-386.tar.gz
 ARCH=$(uname -m)
 GO_CUR=${GO_AMD64}
 
@@ -21,7 +21,7 @@ if [ -z "$GOPATH" ]; then
   export GOPATH=/v2ray
 fi
 
-go get -u github.com/v2ray/v2ray-core
+go get -u v2ray.com/core
 rm $GOPATH/bin/build
-go install github.com/v2ray/v2ray-core/tools/build
+go install v2ray.com/core/tools/build
 $GOPATH/bin/build

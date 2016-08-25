@@ -4,10 +4,12 @@ import (
 	"io"
 	"sync"
 
-	"github.com/v2ray/v2ray-core/app"
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	"github.com/v2ray/v2ray-core/proxy"
-	"github.com/v2ray/v2ray-core/transport/ray"
+	"v2ray.com/core/app"
+	"v2ray.com/core/common/alloc"
+	v2io "v2ray.com/core/common/io"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/proxy"
+	"v2ray.com/core/transport/ray"
 )
 
 type OutboundConnectionHandler struct {
@@ -16,35 +18,38 @@ type OutboundConnectionHandler struct {
 	ConnOutput  io.Writer
 }
 
-func (this *OutboundConnectionHandler) Dispatch(packet v2net.Packet, ray ray.OutboundRay) error {
+func (this *OutboundConnectionHandler) Dispatch(destination v2net.Destination, payload *alloc.Buffer, ray ray.OutboundRay) error {
 	input := ray.OutboundInput()
 	output := ray.OutboundOutput()
 
-	this.Destination = packet.Destination()
-	if packet.Chunk() != nil {
-		this.ConnOutput.Write(packet.Chunk().Value)
-		packet.Chunk().Release()
-	}
+	this.Destination = destination
+	this.ConnOutput.Write(payload.Value)
+	payload.Release()
 
-	if packet.MoreChunks() {
-		writeFinish := &sync.Mutex{}
+	writeFinish := &sync.Mutex{}
 
-		writeFinish.Lock()
+	writeFinish.Lock()
 
-		go func() {
-			v2net.ChanToWriter(this.ConnOutput, input)
-			writeFinish.Unlock()
-		}()
+	go func() {
+		v2writer := v2io.NewAdaptiveWriter(this.ConnOutput)
+		defer v2writer.Release()
 
-		writeFinish.Lock()
-	}
+		v2io.Pipe(input, v2writer)
+		writeFinish.Unlock()
+		input.Release()
+	}()
 
-	v2net.ReaderToChan(output, this.ConnInput)
-	close(output)
+	writeFinish.Lock()
+
+	v2reader := v2io.NewAdaptiveReader(this.ConnInput)
+	defer v2reader.Release()
+
+	v2io.Pipe(v2reader, output)
+	output.Close()
 
 	return nil
 }
 
-func (this *OutboundConnectionHandler) Create(space app.Space, config interface{}) (proxy.OutboundHandler, error) {
+func (this *OutboundConnectionHandler) Create(space app.Space, config interface{}, sendThrough v2net.Address) (proxy.OutboundHandler, error) {
 	return this, nil
 }

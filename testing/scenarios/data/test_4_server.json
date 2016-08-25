@@ -1,10 +1,14 @@
 {
   "port": 50031,
   "log": {
-    "loglevel": "warning"
+    "loglevel": "debug"
   },
   "inbound": {
+    "listen": "127.0.0.1",
     "protocol": "vmess",
+    "streamSettings": {
+      "network": "kcp"
+    },
     "settings": {
       "clients": [
         {
@@ -27,22 +31,21 @@
   "inboundDetour": [
     {
       "protocol": "vmess",
+      "listen": "127.0.0.1",
       "port": "50035-50039",
       "tag": "detour",
-      "settings": {
-        "clients": [
-          {
-            "id": "a12f49ba-466c-4dd5-8438-5c315143bc96",
-            "alterId": 100,
-            "level": 1
-          }
-        ]
-      },
+      "settings": {},
+      "streamSettings": {
+      "network": "kcp"
+    },
       "allocate": {
         "strategy": "random",
         "concurrency": 2,
         "refresh": 5
       }
     }
-  ]
+  ],
+  "transport": {
+    "connectionReuse": true
+  }
 }

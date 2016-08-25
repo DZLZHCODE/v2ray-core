@@ -1,6 +1,10 @@
 {
   "port": 50030,
+  "log": {
+    "loglevel": "debug"
+  },
   "inbound": {
+    "listen": "127.0.0.1",
     "protocol": "dokodemo-door",
     "settings": {
       "address": "127.0.0.1",
@@ -11,6 +15,9 @@
   },
   "outbound": {
     "protocol": "vmess",
+    "streamSettings": {
+      "network": "kcp"
+    },
     "settings": {
       "vnext": [
         {
@@ -25,5 +32,8 @@
         }
       ]
     }
+  },
+  "transport": {
+    "connectionReuse": true
   }
 }

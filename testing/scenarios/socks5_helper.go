@@ -1,7 +1,7 @@
 package scenarios
 
 import (
-	v2net "github.com/v2ray/v2ray-core/common/net"
+	v2net "v2ray.com/core/common/net"
 )
 
 const (
@@ -15,16 +15,16 @@ func socks5AuthMethodRequest(methods ...byte) []byte {
 }
 
 func appendAddress(request []byte, address v2net.Address) []byte {
-	switch {
-	case address.IsIPv4():
+	switch address.Family() {
+	case v2net.AddressFamilyIPv4:
 		request = append(request, byte(0x01))
 		request = append(request, address.IP()...)
 
-	case address.IsIPv6():
+	case v2net.AddressFamilyIPv6:
 		request = append(request, byte(0x04))
 		request = append(request, address.IP()...)
 
-	case address.IsDomain():
+	case v2net.AddressFamilyDomain:
 		request = append(request, byte(0x03), byte(len(address.Domain())))
 		request = append(request, []byte(address.Domain())...)
 
@@ -35,7 +35,7 @@ func appendAddress(request []byte, address v2net.Address) []byte {
 func socks5Request(command byte, address v2net.Destination) []byte {
 	request := []byte{socks5Version, command, 0}
 	request = appendAddress(request, address.Address())
-	request = append(request, address.Port().Bytes()...)
+	request = address.Port().Bytes(request)
 	return request
 }
 
@@ -43,7 +43,7 @@ func socks5UDPRequest(address v2net.Destination, payload []byte) []byte {
 	request := make([]byte, 0, 1024)
 	request = append(request, 0, 0, 0)
 	request = appendAddress(request, address.Address())
-	request = append(request, address.Port().Bytes()...)
+	request = address.Port().Bytes(request)
 	request = append(request, payload...)
 	return request
 }

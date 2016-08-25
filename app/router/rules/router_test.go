@@ -3,22 +3,38 @@ package rules_test
 import (
 	"testing"
 
-	. "github.com/v2ray/v2ray-core/app/router/rules"
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	v2testing "github.com/v2ray/v2ray-core/testing"
-	"github.com/v2ray/v2ray-core/testing/assert"
+	"v2ray.com/core/app"
+	"v2ray.com/core/app/dispatcher"
+	dispatchers "v2ray.com/core/app/dispatcher/impl"
+	"v2ray.com/core/app/dns"
+	"v2ray.com/core/app/proxyman"
+	"v2ray.com/core/app/router"
+	. "v2ray.com/core/app/router/rules"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/testing/assert"
 )
 
 func TestSimpleRouter(t *testing.T) {
-	v2testing.Current(t)
+	assert := assert.On(t)
 
-	router := NewRouter().AddRule(
-		&Rule{
-			Tag:       "test",
-			Condition: NewNetworkMatcher(v2net.Network("tcp").AsList()),
-		})
+	config := &RouterRuleConfig{
+		Rules: []*Rule{
+			{
+				Tag:       "test",
+				Condition: NewNetworkMatcher(v2net.Network("tcp").AsList()),
+			},
+		},
+	}
 
-	tag, err := router.TakeDetour(v2net.TCPDestination(v2net.DomainAddress("v2ray.com"), 80))
+	space := app.NewSpace()
+	space.BindApp(dns.APP_ID, dns.NewCacheServer(space, &dns.Config{}))
+	space.BindApp(dispatcher.APP_ID, dispatchers.NewDefaultDispatcher(space))
+	space.BindApp(proxyman.APP_ID_OUTBOUND_MANAGER, proxyman.NewDefaultOutboundHandlerManager())
+	r := NewRouter(config, space)
+	space.BindApp(router.APP_ID, r)
+	assert.Error(space.Initialize()).IsNil()
+
+	tag, err := r.TakeDetour(v2net.TCPDestination(v2net.DomainAddress("v2ray.com"), 80))
 	assert.Error(err).IsNil()
-	assert.StringLiteral(tag).Equals("test")
+	assert.String(tag).Equals("test")
 }

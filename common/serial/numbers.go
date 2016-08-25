@@ -4,58 +4,42 @@ import (
 	"strconv"
 )
 
-type Uint16 interface {
-	Value() uint16
+func Uint16ToBytes(value uint16, b []byte) []byte {
+	return append(b, byte(value>>8), byte(value))
 }
 
-type Uint16Literal uint16
-
-func (this Uint16Literal) String() string {
-	return strconv.Itoa(int(this))
+func Uint16ToString(value uint16) string {
+	return strconv.Itoa(int(value))
 }
 
-func (this Uint16Literal) Value() uint16 {
-	return uint16(this)
+func Uint32ToBytes(value uint32, b []byte) []byte {
+	return append(b, byte(value>>24), byte(value>>16), byte(value>>8), byte(value))
 }
 
-func (this Uint16Literal) Bytes() []byte {
-	return []byte{byte(this >> 8), byte(this)}
+func Uint32ToString(value uint32) string {
+	return strconv.FormatUint(uint64(value), 10)
 }
 
-type Int interface {
-	Value() int
+func IntToBytes(value int, b []byte) []byte {
+	return append(b, byte(value>>24), byte(value>>16), byte(value>>8), byte(value))
 }
 
-type IntLiteral int
-
-func (this IntLiteral) String() string {
-	return strconv.Itoa(int(this))
+func IntToString(value int) string {
+	return Int64ToString(int64(value))
 }
 
-func (this IntLiteral) Value() int {
-	return int(this)
+func Int64ToBytes(value int64, b []byte) []byte {
+	return append(b,
+		byte(value>>56),
+		byte(value>>48),
+		byte(value>>40),
+		byte(value>>32),
+		byte(value>>24),
+		byte(value>>16),
+		byte(value>>8),
+		byte(value))
 }
 
-type Int64Literal int64
-
-func (this Int64Literal) String() string {
-	return strconv.FormatInt(this.Value(), 10)
-}
-
-func (this Int64Literal) Value() int64 {
-	return int64(this)
-}
-
-func (this Int64Literal) Bytes() []byte {
-	value := this.Value()
-	return []byte{
-		byte(value >> 56),
-		byte(value >> 48),
-		byte(value >> 40),
-		byte(value >> 32),
-		byte(value >> 24),
-		byte(value >> 16),
-		byte(value >> 8),
-		byte(value),
-	}
+func Int64ToString(value int64) string {
+	return strconv.FormatInt(value, 10)
 }

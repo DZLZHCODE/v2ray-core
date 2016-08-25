@@ -1,14 +1,11 @@
-// +build json
-
 package rules_test
 
 import (
 	"testing"
 
-	. "github.com/v2ray/v2ray-core/app/router/rules"
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	v2testing "github.com/v2ray/v2ray-core/testing"
-	"github.com/v2ray/v2ray-core/testing/assert"
+	. "v2ray.com/core/app/router/rules"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/testing/assert"
 )
 
 func makeDomainDestination(domain string) v2net.Destination {
@@ -16,11 +13,9 @@ func makeDomainDestination(domain string) v2net.Destination {
 }
 
 func TestChinaSites(t *testing.T) {
-	v2testing.Current(t)
+	assert := assert.On(t)
 
-	rule := ParseRule([]byte(`{
-    "type": "chinasites"
-  }`))
+	rule := NewChinaSitesRule("tag")
 	assert.Bool(rule.Apply(makeDomainDestination("v.qq.com"))).IsTrue()
 	assert.Bool(rule.Apply(makeDomainDestination("www.163.com"))).IsTrue()
 	assert.Bool(rule.Apply(makeDomainDestination("ngacn.cc"))).IsTrue()

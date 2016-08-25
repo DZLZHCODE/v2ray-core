@@ -4,13 +4,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/v2ray/v2ray-core/app"
-	"github.com/v2ray/v2ray-core/common/dice"
-	"github.com/v2ray/v2ray-core/common/log"
-	v2net "github.com/v2ray/v2ray-core/common/net"
-	"github.com/v2ray/v2ray-core/common/retry"
-	"github.com/v2ray/v2ray-core/proxy"
-	proxyrepo "github.com/v2ray/v2ray-core/proxy/repo"
+	"v2ray.com/core/app"
+	"v2ray.com/core/common/dice"
+	"v2ray.com/core/common/log"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/common/retry"
+	"v2ray.com/core/proxy"
+	proxyregistry "v2ray.com/core/proxy/registry"
 )
 
 type InboundDetourHandlerDynamic struct {
@@ -18,8 +18,8 @@ type InboundDetourHandlerDynamic struct {
 	space       app.Space
 	config      *InboundDetourConfig
 	portsInUse  map[v2net.Port]bool
-	ichInUse    []proxy.InboundHandler
-	ich2Recycle []proxy.InboundHandler
+	ichs        []proxy.InboundHandler
+	ich2Recyle  []proxy.InboundHandler
 	lastRefresh time.Time
 }
 
@@ -29,18 +29,22 @@ func NewInboundDetourHandlerDynamic(space app.Space, config *InboundDetourConfig
 		config:     config,
 		portsInUse: make(map[v2net.Port]bool),
 	}
-	ichCount := config.Allocation.Concurrency
-	ichArray := make([]proxy.InboundHandler, ichCount*2)
-	for idx, _ := range ichArray {
-		ich, err := proxyrepo.CreateInboundHandler(config.Protocol, space, config.Settings)
-		if err != nil {
-			log.Error("Point: Failed to create inbound connection handler: ", err)
-			return nil, err
-		}
-		ichArray[idx] = ich
+	handler.ichs = make([]proxy.InboundHandler, config.Allocation.Concurrency)
+
+	// To test configuration
+	ich, err := proxyregistry.CreateInboundHandler(config.Protocol, space, config.Settings, &proxy.InboundHandlerMeta{
+		Address:                config.ListenOn,
+		Port:                   0,
+		Tag:                    config.Tag,
+		StreamSettings:         config.StreamSettings,
+		AllowPassiveConnection: config.AllowPassiveConnection,
+	})
+	if err != nil {
+		log.Error("Point: Failed to create inbound connection handler: ", err)
+		return nil, err
 	}
-	handler.ichInUse = ichArray[:ichCount]
-	handler.ich2Recycle = ichArray[ichCount:]
+	ich.Close()
+
 	return handler, nil
 }
 
@@ -51,7 +55,6 @@ func (this *InboundDetourHandlerDynamic) pickUnusedPort() v2net.Port {
 		port := this.config.PortRange.From + v2net.Port(r)
 		_, used := this.portsInUse[port]
 		if !used {
-			this.portsInUse[port] = true
 			return port
 		}
 	}
@@ -60,7 +63,7 @@ func (this *InboundDetourHandlerDynamic) pickUnusedPort() v2net.Port {
 func (this *InboundDetourHandlerDynamic) GetConnectionHandler() (proxy.InboundHandler, int) {
 	this.RLock()
 	defer this.RUnlock()
-	ich := this.ichInUse[dice.Roll(len(this.ichInUse))]
+	ich := this.ichs[dice.Roll(len(this.ichs))]
 	until := this.config.Allocation.Refresh - int((time.Now().Unix()-this.lastRefresh.Unix())/60/1000)
 	if until < 0 {
 		until = 0
@@ -71,41 +74,59 @@ func (this *InboundDetourHandlerDynamic) GetConnectionHandler() (proxy.InboundHa
 func (this *InboundDetourHandlerDynamic) Close() {
 	this.Lock()
 	defer this.Unlock()
-	for _, ich := range this.ichInUse {
+	for _, ich := range this.ichs {
 		ich.Close()
 	}
-	if this.ich2Recycle != nil {
-		for _, ich := range this.ich2Recycle {
-			if ich != nil {
-				ich.Close()
+}
+
+func (this *InboundDetourHandlerDynamic) RecyleHandles() {
+	if this.ich2Recyle != nil {
+		for _, ich := range this.ich2Recyle {
+			if ich == nil {
+				continue
 			}
+			port := ich.Port()
+			ich.Close()
+			delete(this.portsInUse, port)
 		}
+		this.ich2Recyle = nil
 	}
 }
 
 func (this *InboundDetourHandlerDynamic) refresh() error {
-	this.Lock()
-	defer this.Unlock()
-
 	this.lastRefresh = time.Now()
 
-	this.ich2Recycle, this.ichInUse = this.ichInUse, this.ich2Recycle
-	for _, ich := range this.ichInUse {
-		delete(this.portsInUse, ich.Port())
-		ich.Close()
-		port := this.pickUnusedPort()
-		err := retry.Timed(100 /* times */, 100 /* ms */).On(func() error {
-			err := ich.Listen(port)
+	config := this.config
+	this.ich2Recyle = this.ichs
+	newIchs := make([]proxy.InboundHandler, config.Allocation.Concurrency)
+
+	for idx := range newIchs {
+		err := retry.Timed(5, 100).On(func() error {
+			port := this.pickUnusedPort()
+			ich, err := proxyregistry.CreateInboundHandler(config.Protocol, this.space, config.Settings, &proxy.InboundHandlerMeta{
+				Address: config.ListenOn, Port: port, Tag: config.Tag, StreamSettings: config.StreamSettings})
 			if err != nil {
-				log.Error("Point: Failed to start inbound detour on port ", port, ": ", err)
+				delete(this.portsInUse, port)
 				return err
 			}
+			err = ich.Start()
+			if err != nil {
+				delete(this.portsInUse, port)
+				return err
+			}
+			this.portsInUse[port] = true
+			newIchs[idx] = ich
 			return nil
 		})
 		if err != nil {
+			log.Error("Point: Failed to create inbound connection handler: ", err)
 			return err
 		}
 	}
+
+	this.Lock()
+	this.ichs = newIchs
+	this.Unlock()
 
 	return nil
 }
@@ -113,12 +134,19 @@ func (this *InboundDetourHandlerDynamic) refresh() error {
 func (this *InboundDetourHandlerDynamic) Start() error {
 	err := this.refresh()
 	if err != nil {
+		log.Error("Point: Failed to refresh dynamic allocations: ", err)
 		return err
 	}
 
 	go func() {
-		for range time.Tick(time.Duration(this.config.Allocation.Refresh) * time.Minute) {
-			this.refresh()
+		for {
+			time.Sleep(time.Duration(this.config.Allocation.Refresh)*time.Minute - 1)
+			this.RecyleHandles()
+			err := this.refresh()
+			if err != nil {
+				log.Error("Point: Failed to refresh dynamic allocations: ", err)
+			}
+			time.Sleep(time.Minute)
 		}
 	}()
 

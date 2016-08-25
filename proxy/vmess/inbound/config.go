@@ -1,7 +1,7 @@
 package inbound
 
 import (
-	"github.com/v2ray/v2ray-core/proxy/vmess"
+	"v2ray.com/core/common/protocol"
 )
 
 type DetourConfig struct {
@@ -12,7 +12,14 @@ type FeaturesConfig struct {
 	Detour *DetourConfig
 }
 
+type DefaultConfig struct {
+	AlterIDs uint16
+	Level    protocol.UserLevel
+}
+
 type Config struct {
-	AllowedUsers []*vmess.User
+	AllowedUsers []*protocol.User
 	Features     *FeaturesConfig
+	Defaults     *DefaultConfig
+	DetourConfig *DetourConfig
 }

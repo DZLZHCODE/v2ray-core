@@ -2,68 +2,89 @@ package scenarios
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"time"
 
-	_ "github.com/v2ray/v2ray-core/app/router/rules"
-	"github.com/v2ray/v2ray-core/common/log"
-	"github.com/v2ray/v2ray-core/shell/point"
+	_ "v2ray.com/core/app/router/rules"
+	"v2ray.com/core/common/log"
 
-	// The following are neccesary as they register handlers in their init functions.
-	_ "github.com/v2ray/v2ray-core/proxy/blackhole"
-	_ "github.com/v2ray/v2ray-core/proxy/dokodemo"
-	_ "github.com/v2ray/v2ray-core/proxy/freedom"
-	_ "github.com/v2ray/v2ray-core/proxy/http"
-	_ "github.com/v2ray/v2ray-core/proxy/socks"
-	_ "github.com/v2ray/v2ray-core/proxy/vmess/inbound"
-	_ "github.com/v2ray/v2ray-core/proxy/vmess/outbound"
+	// The following are necessary as they register handlers in their init functions.
+	_ "v2ray.com/core/proxy/blackhole"
+	_ "v2ray.com/core/proxy/dokodemo"
+	_ "v2ray.com/core/proxy/freedom"
+	_ "v2ray.com/core/proxy/http"
+	_ "v2ray.com/core/proxy/shadowsocks"
+	_ "v2ray.com/core/proxy/socks"
+	_ "v2ray.com/core/proxy/vmess/inbound"
+	_ "v2ray.com/core/proxy/vmess/outbound"
 )
 
 var (
-	runningServers = make([]*point.Point, 0, 10)
+	runningServers = make([]*exec.Cmd, 0, 10)
 )
 
+func GetTestBinaryPath() string {
+	file := filepath.Join(os.Getenv("GOPATH"), "out", "v2ray", "v2ray.test")
+	if runtime.GOOS == "windows" {
+		file += ".exe"
+	}
+	return file
+}
+
+func GetSourcePath() string {
+	return filepath.Join("v2ray.com", "core", "shell", "point", "main")
+}
+
 func TestFile(filename string) string {
-	return filepath.Join(os.Getenv("GOPATH"), "src", "github.com", "v2ray", "v2ray-core", "testing", "scenarios", "data", filename)
+	return filepath.Join(os.Getenv("GOPATH"), "src", "v2ray.com", "core", "testing", "scenarios", "data", filename)
 }
 
 func InitializeServerSetOnce(testcase string) error {
-	err := InitializeServer(TestFile(testcase + "_server.json"))
-	if err != nil {
+	if err := InitializeServerServer(testcase); err != nil {
 		return err
 	}
-	err = InitializeServer(TestFile(testcase + "_client.json"))
-	if err != nil {
+	if err := InitializeServerClient(testcase); err != nil {
 		return err
 	}
 	return nil
 }
 
+func InitializeServerServer(testcase string) error {
+	return InitializeServer(TestFile(testcase + "_server.json"))
+}
+
+func InitializeServerClient(testcase string) error {
+	return InitializeServer(TestFile(testcase + "_client.json"))
+}
+
 func InitializeServer(configFile string) error {
-	config, err := point.LoadConfig(configFile)
+	err := BuildV2Ray()
 	if err != nil {
-		log.Error("Failed to read config file (", configFile, "): ", configFile, err)
 		return err
 	}
 
-	vPoint, err := point.NewPoint(config)
+	proc := RunV2Ray(configFile)
+
+	err = proc.Start()
 	if err != nil {
-		log.Error("Failed to create Point server: ", err)
 		return err
 	}
 
-	err = vPoint.Start()
-	if err != nil {
-		log.Error("Error starting Point server: ", err)
-		return err
-	}
-	runningServers = append(runningServers, vPoint)
+	time.Sleep(time.Second)
+
+	runningServers = append(runningServers, proc)
 
 	return nil
 }
 
 func CloseAllServers() {
+	log.Info("Closing all servers.")
 	for _, server := range runningServers {
-		server.Close()
+		server.Process.Signal(os.Interrupt)
+		server.Process.Wait()
 	}
-	runningServers = make([]*point.Point, 0, 10)
+	runningServers = make([]*exec.Cmd, 0, 10)
+	log.Info("All server closed.")
 }

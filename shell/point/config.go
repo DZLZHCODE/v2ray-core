@@ -1,26 +1,35 @@
 package point
 
 import (
-	"github.com/v2ray/v2ray-core/app/dns"
-	"github.com/v2ray/v2ray-core/app/router"
-	"github.com/v2ray/v2ray-core/common/log"
-	v2net "github.com/v2ray/v2ray-core/common/net"
+	"v2ray.com/core/app/dns"
+	"v2ray.com/core/app/router"
+	"v2ray.com/core/common"
+	"v2ray.com/core/common/log"
+	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/transport"
+	"v2ray.com/core/transport/internet"
 )
 
-type ConnectionConfig struct {
-	Protocol string
-	Settings []byte
+type InboundConnectionConfig struct {
+	Port                   v2net.Port
+	ListenOn               v2net.Address
+	StreamSettings         *internet.StreamSettings
+	Protocol               string
+	Settings               []byte
+	AllowPassiveConnection bool
+}
+
+type OutboundConnectionConfig struct {
+	Protocol       string
+	SendThrough    v2net.Address
+	StreamSettings *internet.StreamSettings
+	Settings       []byte
 }
 
 type LogConfig struct {
 	AccessLog string
 	ErrorLog  string
 	LogLevel  log.LogLevel
-}
-
-type DnsConfig struct {
-	Enabled  bool
-	Settings *dns.CacheConfig
 }
 
 const (
@@ -36,27 +45,34 @@ type InboundDetourAllocationConfig struct {
 }
 
 type InboundDetourConfig struct {
-	Protocol   string
-	PortRange  v2net.PortRange
-	Tag        string
-	Allocation *InboundDetourAllocationConfig
-	Settings   []byte
+	Protocol               string
+	PortRange              v2net.PortRange
+	ListenOn               v2net.Address
+	Tag                    string
+	Allocation             *InboundDetourAllocationConfig
+	StreamSettings         *internet.StreamSettings
+	Settings               []byte
+	AllowPassiveConnection bool
 }
 
 type OutboundDetourConfig struct {
-	Protocol string
-	Tag      string
-	Settings []byte
+	Protocol       string
+	SendThrough    v2net.Address
+	StreamSettings *internet.StreamSettings
+	Tag            string
+	Settings       []byte
 }
 
 type Config struct {
 	Port            v2net.Port
 	LogConfig       *LogConfig
 	RouterConfig    *router.Config
-	InboundConfig   *ConnectionConfig
-	OutboundConfig  *ConnectionConfig
+	DNSConfig       *dns.Config
+	InboundConfig   *InboundConnectionConfig
+	OutboundConfig  *OutboundConnectionConfig
 	InboundDetours  []*InboundDetourConfig
 	OutboundDetours []*OutboundDetourConfig
+	TransportConfig *transport.Config
 }
 
 type ConfigLoader func(init string) (*Config, error)
@@ -67,7 +83,7 @@ var (
 
 func LoadConfig(init string) (*Config, error) {
 	if configLoader == nil {
-		return nil, BadConfiguration
+		return nil, common.ErrBadConfiguration
 	}
 	return configLoader(init)
 }

@@ -1,11 +1,10 @@
 {
   "port": 50020,
   "log": {
-    "access": "/tmp/v2ray_access_1.log",
-    "error": "/tmp/v2ray_error_1.log",
-    "loglevel": "error"
+    "loglevel": "none"
   },
   "inbound": {
+    "listen": "127.0.0.1",
     "protocol": "dokodemo-door",
     "settings": {
       "address": "127.0.0.1",
@@ -32,6 +31,7 @@
     {
       "protocol": "dokodemo-door",
       "port": 50022,
+      "listen": "127.0.0.1",
       "settings": {
         "address": "127.0.0.1",
         "port": 50025,
