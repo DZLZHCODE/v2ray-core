@@ -1,14 +1,14 @@
 package assert
 
 import (
-	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/common/net"
 )
 
-func (this *Assert) Destination(value v2net.Destination) *DestinationSubject {
+func (v *Assert) Destination(value net.Destination) *DestinationSubject {
 	return &DestinationSubject{
 		Subject: Subject{
 			disp: value.String(),
-			a:    this,
+			a:    v,
 		},
 		value: value,
 	}
@@ -16,43 +16,49 @@ func (this *Assert) Destination(value v2net.Destination) *DestinationSubject {
 
 type DestinationSubject struct {
 	Subject
-	value v2net.Destination
+	value net.Destination
 }
 
-func (this *DestinationSubject) IsTCP() {
-	if !this.value.IsTCP() {
-		this.Fail("is", "a TCP destination")
+func (v *DestinationSubject) IsTCP() {
+	if v.value.Network != net.Network_TCP {
+		v.Fail("is", "a TCP destination")
 	}
 }
 
-func (this *DestinationSubject) IsNotTCP() {
-	if this.value.IsTCP() {
-		this.Fail("is not", "a TCP destination")
+func (v *DestinationSubject) IsNotTCP() {
+	if v.value.Network == net.Network_TCP {
+		v.Fail("is not", "a TCP destination")
 	}
 }
 
-func (this *DestinationSubject) IsUDP() {
-	if !this.value.IsUDP() {
-		this.Fail("is", "a UDP destination")
+func (v *DestinationSubject) IsUDP() {
+	if v.value.Network != net.Network_UDP {
+		v.Fail("is", "a UDP destination")
 	}
 }
 
-func (this *DestinationSubject) IsNotUDP() {
-	if this.value.IsUDP() {
-		this.Fail("is not", "a UDP destination")
+func (v *DestinationSubject) IsNotUDP() {
+	if v.value.Network == net.Network_UDP {
+		v.Fail("is not", "a UDP destination")
 	}
 }
 
-func (this *DestinationSubject) EqualsString(another string) {
-	if this.value.String() != another {
-		this.Fail("not equals to string", another)
+func (v *DestinationSubject) EqualsString(another string) {
+	if v.value.String() != another {
+		v.Fail("not equals to string", another)
 	}
 }
 
-func (this *DestinationSubject) HasAddress() *AddressSubject {
-	return this.a.Address(this.value.Address())
+func (v *DestinationSubject) Equals(another net.Destination) {
+	if v.value != another {
+		v.Fail("not equals to", another.String())
+	}
 }
 
-func (this *DestinationSubject) HasPort() *PortSubject {
-	return this.a.Port(this.value.Port())
+func (v *DestinationSubject) HasAddress() *AddressSubject {
+	return v.a.Address(v.value.Address)
+}
+
+func (v *DestinationSubject) HasPort() *PortSubject {
+	return v.a.Port(v.value.Port)
 }

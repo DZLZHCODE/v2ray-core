@@ -1,14 +1,14 @@
 package assert
 
 import (
-	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/common/net"
 )
 
-func (this *Assert) Address(value v2net.Address) *AddressSubject {
+func (v *Assert) Address(value net.Address) *AddressSubject {
 	return &AddressSubject{
 		Subject: Subject{
 			disp: value.String(),
-			a:    this,
+			a:    v,
 		},
 		value: value,
 	}
@@ -16,17 +16,17 @@ func (this *Assert) Address(value v2net.Address) *AddressSubject {
 
 type AddressSubject struct {
 	Subject
-	value v2net.Address
+	value net.Address
 }
 
-func (subject *AddressSubject) NotEquals(another v2net.Address) {
-	if subject.value.Equals(another) {
+func (subject *AddressSubject) NotEquals(another net.Address) {
+	if subject.value == another {
 		subject.Fail("not equals to", another.String())
 	}
 }
 
-func (subject *AddressSubject) Equals(another v2net.Address) {
-	if !subject.value.Equals(another) {
+func (subject *AddressSubject) Equals(another net.Address) {
+	if subject.value != another {
 		subject.Fail("equals to", another.String())
 	}
 }

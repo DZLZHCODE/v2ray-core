@@ -21,7 +21,7 @@ func (server *Server) Start() (v2net.Destination, error) {
 		Zone: "",
 	})
 	if err != nil {
-		return nil, err
+		return v2net.Destination{}, err
 	}
 	server.Port = v2net.Port(conn.LocalAddr().(*net.UDPAddr).Port)
 	server.conn = conn
@@ -41,7 +41,9 @@ func (server *Server) handleConnection(conn *net.UDPConn) {
 		}
 
 		response := server.MsgProcessor(buffer[:nBytes])
-		conn.WriteToUDP(response, addr)
+		if _, err := conn.WriteToUDP(response, addr); err != nil {
+			fmt.Println("Failed to write to UDP: ", err.Error())
+		}
 	}
 }
 

@@ -55,11 +55,5 @@
         }
       ]
     }
-  },
-  "transport": {
-    "kcpSettings": {
-      "uplinkCapacity": 10,
-      "downlinkCapacity": 10
-    }
   }
 }

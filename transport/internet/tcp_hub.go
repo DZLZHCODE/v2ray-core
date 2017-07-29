@@ -1,97 +1,75 @@
 package internet
 
 import (
-	"crypto/tls"
-	"errors"
+	"context"
 	"net"
-	"sync"
+	"time"
 
-	"v2ray.com/core/common/log"
 	v2net "v2ray.com/core/common/net"
-	v2tls "v2ray.com/core/transport/internet/tls"
 )
 
 var (
-	ErrClosedConnection = errors.New("Connection already closed.")
-
-	KCPListenFunc    ListenFunc
-	TCPListenFunc    ListenFunc
-	RawTCPListenFunc ListenFunc
-	WSListenFunc     ListenFunc
+	transportListenerCache = make(map[TransportProtocol]ListenFunc)
 )
 
-type ListenFunc func(address v2net.Address, port v2net.Port) (Listener, error)
+func RegisterTransportListener(protocol TransportProtocol, listener ListenFunc) error {
+	if _, found := transportListenerCache[protocol]; found {
+		return newError(protocol, " listener already registered.").AtError()
+	}
+	transportListenerCache[protocol] = listener
+	return nil
+}
+
+type AddConnection func(context.Context, Connection) bool
+
+type ListenFunc func(ctx context.Context, address v2net.Address, port v2net.Port, addConn AddConnection) (Listener, error)
+
 type Listener interface {
-	Accept() (Connection, error)
 	Close() error
 	Addr() net.Addr
 }
 
-type TCPHub struct {
-	sync.Mutex
-	listener     Listener
-	connCallback ConnectionHandler
-	accepting    bool
-	tlsConfig    *tls.Config
-}
-
-func ListenTCP(address v2net.Address, port v2net.Port, callback ConnectionHandler, settings *StreamSettings) (*TCPHub, error) {
-	var listener Listener
-	var err error
-	switch {
-	case settings.IsCapableOf(StreamConnectionTypeTCP):
-		listener, err = TCPListenFunc(address, port)
-	case settings.IsCapableOf(StreamConnectionTypeKCP):
-		listener, err = KCPListenFunc(address, port)
-	case settings.IsCapableOf(StreamConnectionTypeWebSocket):
-		listener, err = WSListenFunc(address, port)
-	case settings.IsCapableOf(StreamConnectionTypeRawTCP):
-		listener, err = RawTCPListenFunc(address, port)
-	default:
-		log.Error("Internet|Listener: Unknown stream type: ", settings.Type)
-		err = ErrUnsupportedStreamType
-	}
-
+func ListenTCP(ctx context.Context, address v2net.Address, port v2net.Port, conns chan<- Connection) (Listener, error) {
+	settings := StreamSettingsFromContext(ctx)
+	protocol := settings.GetEffectiveProtocol()
+	transportSettings, err := settings.GetEffectiveTransportSettings()
 	if err != nil {
-		log.Warning("Internet|Listener: Failed to listen on ", address, ":", port)
 		return nil, err
 	}
-
-	var tlsConfig *tls.Config
-	if settings.Security == StreamSecurityTypeTLS {
-		tlsConfig = settings.TLSSettings.GetTLSConfig()
-	}
-
-	hub := &TCPHub{
-		listener:     listener,
-		connCallback: callback,
-		tlsConfig:    tlsConfig,
-	}
-
-	go hub.start()
-	return hub, nil
-}
-
-func (this *TCPHub) Close() {
-	this.accepting = false
-	this.listener.Close()
-}
-
-func (this *TCPHub) start() {
-	this.accepting = true
-	for this.accepting {
-		conn, err := this.listener.Accept()
-
+	ctx = ContextWithTransportSettings(ctx, transportSettings)
+	if settings != nil && settings.HasSecuritySettings() {
+		securitySettings, err := settings.GetEffectiveSecuritySettings()
 		if err != nil {
-			if this.accepting {
-				log.Warning("Internet|Listener: Failed to accept new TCP connection: ", err)
-			}
-			continue
+			return nil, err
 		}
-		if this.tlsConfig != nil {
-			tlsConn := tls.Server(conn, this.tlsConfig)
-			conn = v2tls.NewConnection(tlsConn)
-		}
-		go this.connCallback(conn)
+		ctx = ContextWithSecuritySettings(ctx, securitySettings)
 	}
+	listenFunc := transportListenerCache[protocol]
+	if listenFunc == nil {
+		return nil, newError(protocol, " listener not registered.").AtError()
+	}
+	listener, err := listenFunc(ctx, address, port, func(ctx context.Context, conn Connection) bool {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+			return false
+		case conns <- conn:
+			return true
+		default:
+			select {
+			case <-ctx.Done():
+				conn.Close()
+				return false
+			case conns <- conn:
+				return true
+			case <-time.After(time.Second * 5):
+				conn.Close()
+				return false
+			}
+		}
+	})
+	if err != nil {
+		return nil, newError("failed to listen on address: ", address, ":", port).Base(err)
+	}
+	return listener, nil
 }

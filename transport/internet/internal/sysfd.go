@@ -1,15 +1,15 @@
 package internal
 
 import (
-	"errors"
 	"net"
 	"reflect"
 )
 
 var (
-	ErrInvalidConn = errors.New("Invalid Connection.")
+	errInvalidConn = newError("not a net.Conn")
 )
 
+// GetSysFd returns the underlying fd of a connection.
 func GetSysFd(conn net.Conn) (int, error) {
 	cv := reflect.ValueOf(conn)
 	switch ce := cv.Elem(); ce.Kind() {
@@ -21,5 +21,5 @@ func GetSysFd(conn net.Conn) (int, error) {
 			return int(fd.Int()), nil
 		}
 	}
-	return 0, ErrInvalidConn
+	return 0, errInvalidConn
 }

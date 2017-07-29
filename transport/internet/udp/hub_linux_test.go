@@ -7,9 +7,8 @@ import (
 	"syscall"
 	"testing"
 
-	"v2ray.com/core/common/alloc"
+	"v2ray.com/core/common/buf"
 	v2net "v2ray.com/core/common/net"
-	"v2ray.com/core/proxy"
 	"v2ray.com/core/testing/assert"
 	"v2ray.com/core/transport/internet/internal"
 	. "v2ray.com/core/transport/internet/udp"
@@ -23,7 +22,7 @@ func TestHubSocksOption(t *testing.T) {
 	}
 
 	hub, err := ListenUDP(v2net.LocalHostIP, v2net.Port(0), ListenOption{
-		Callback:            func(*alloc.Buffer, *proxy.SessionInfo) {},
+		Callback:            func(*buf.Buffer, v2net.Destination, v2net.Destination) {},
 		ReceiveOriginalDest: true,
 	})
 	assert.Error(err).IsNil()
@@ -32,11 +31,11 @@ func TestHubSocksOption(t *testing.T) {
 	fd, err := internal.GetSysFd(conn)
 	assert.Error(err).IsNil()
 
-	v, err := syscall.GetsockoptInt(fd, syscall.SOL_IP, syscall.IP_TRANSPARENT)
+	val, err := syscall.GetsockoptInt(fd, syscall.SOL_IP, syscall.IP_TRANSPARENT)
 	assert.Error(err).IsNil()
-	assert.Int(v).Equals(1)
+	assert.Int(val).Equals(1)
 
-	v, err = syscall.GetsockoptInt(fd, syscall.SOL_IP, syscall.IP_RECVORIGDSTADDR)
+	val, err = syscall.GetsockoptInt(fd, syscall.SOL_IP, syscall.IP_RECVORIGDSTADDR)
 	assert.Error(err).IsNil()
-	assert.Int(v).Equals(1)
+	assert.Int(val).Equals(1)
 }

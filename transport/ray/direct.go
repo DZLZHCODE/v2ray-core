@@ -1,27 +1,20 @@
 package ray
 
 import (
-	"errors"
+	"context"
 	"io"
 	"sync"
 	"time"
 
-	"v2ray.com/core/common/alloc"
-)
-
-const (
-	bufferSize = 128
-)
-
-var (
-	ErrIOTimeout = errors.New("IO Timeout")
+	"v2ray.com/core/common/buf"
+	"v2ray.com/core/common/platform"
 )
 
 // NewRay creates a new Ray for direct traffic transport.
-func NewRay() Ray {
+func NewRay(ctx context.Context) Ray {
 	return &directRay{
-		Input:  NewStream(),
-		Output: NewStream(),
+		Input:  NewStream(ctx),
+		Output: NewStream(ctx),
 	}
 }
 
@@ -30,101 +23,196 @@ type directRay struct {
 	Output *Stream
 }
 
-func (this *directRay) OutboundInput() InputStream {
-	return this.Input
+func (v *directRay) OutboundInput() InputStream {
+	return v.Input
 }
 
-func (this *directRay) OutboundOutput() OutputStream {
-	return this.Output
+func (v *directRay) OutboundOutput() OutputStream {
+	return v.Output
 }
 
-func (this *directRay) InboundInput() OutputStream {
-	return this.Input
+func (v *directRay) InboundInput() OutputStream {
+	return v.Input
 }
 
-func (this *directRay) InboundOutput() InputStream {
-	return this.Output
+func (v *directRay) InboundOutput() InputStream {
+	return v.Output
+}
+
+var streamSizeLimit uint64 = 10 * 1024 * 1024
+
+func init() {
+	const raySizeEnvKey = "v2ray.ray.buffer.size"
+	size := platform.EnvFlag{
+		Name:    raySizeEnvKey,
+		AltName: platform.NormalizeEnvName(raySizeEnvKey),
+	}.GetValueAsInt(10)
+	streamSizeLimit = uint64(size) * 1024 * 1024
 }
 
 type Stream struct {
-	access sync.RWMutex
-	closed bool
-	buffer chan *alloc.Buffer
+	access      sync.RWMutex
+	data        buf.MultiBuffer
+	size        uint64
+	ctx         context.Context
+	readSignal  chan bool
+	writeSignal chan bool
+	close       bool
+	err         bool
 }
 
-func NewStream() *Stream {
+func NewStream(ctx context.Context) *Stream {
 	return &Stream{
-		buffer: make(chan *alloc.Buffer, bufferSize),
+		ctx:         ctx,
+		readSignal:  make(chan bool, 1),
+		writeSignal: make(chan bool, 1),
+		size:        0,
 	}
 }
 
-func (this *Stream) Read() (*alloc.Buffer, error) {
-	if this.buffer == nil {
+func (s *Stream) getData() (buf.MultiBuffer, error) {
+	s.access.Lock()
+	defer s.access.Unlock()
+
+	if s.data != nil {
+		mb := s.data
+		s.data = nil
+		s.size = 0
+		return mb, nil
+	}
+
+	if s.close {
 		return nil, io.EOF
 	}
-	this.access.RLock()
-	if this.buffer == nil {
-		this.access.RUnlock()
-		return nil, io.EOF
+
+	if s.err {
+		return nil, io.ErrClosedPipe
 	}
-	channel := this.buffer
-	this.access.RUnlock()
-	result, open := <-channel
-	if !open {
-		return nil, io.EOF
-	}
-	return result, nil
+
+	return nil, nil
 }
 
-func (this *Stream) Write(data *alloc.Buffer) error {
-	for !this.closed {
-		err := this.TryWriteOnce(data)
-		if err != ErrIOTimeout {
-			return err
+func (s *Stream) Peek(b *buf.Buffer) {
+	s.access.RLock()
+	defer s.access.RUnlock()
+
+	b.Reset(func(data []byte) (int, error) {
+		return s.data.Copy(data), nil
+	})
+}
+
+func (s *Stream) Read() (buf.MultiBuffer, error) {
+	for {
+		mb, err := s.getData()
+		if err != nil {
+			return nil, err
+		}
+
+		if mb != nil {
+			s.notifyRead()
+			return mb, nil
+		}
+
+		select {
+		case <-s.ctx.Done():
+			return nil, io.EOF
+		case <-s.writeSignal:
 		}
 	}
-	return io.EOF
 }
 
-func (this *Stream) TryWriteOnce(data *alloc.Buffer) error {
-	this.access.RLock()
-	defer this.access.RUnlock()
-	if this.closed {
-		return io.EOF
+func (s *Stream) ReadTimeout(timeout time.Duration) (buf.MultiBuffer, error) {
+	for {
+		mb, err := s.getData()
+		if err != nil {
+			return nil, err
+		}
+
+		if mb != nil {
+			s.notifyRead()
+			return mb, nil
+		}
+
+		select {
+		case <-s.ctx.Done():
+			return nil, io.EOF
+		case <-time.After(timeout):
+			return nil, buf.ErrReadTimeout
+		case <-s.writeSignal:
+		}
 	}
-	select {
-	case this.buffer <- data:
+}
+
+func (s *Stream) Write(data buf.MultiBuffer) error {
+	if data.IsEmpty() {
 		return nil
-	case <-time.After(2 * time.Second):
-		return ErrIOTimeout
 	}
-}
 
-func (this *Stream) Close() {
-	if this.closed {
-		return
+	for streamSizeLimit > 0 && s.size >= streamSizeLimit {
+		select {
+		case <-s.ctx.Done():
+			return io.ErrClosedPipe
+		case <-s.readSignal:
+			s.access.RLock()
+			if s.err || s.close {
+				data.Release()
+				s.access.RUnlock()
+				return io.ErrClosedPipe
+			}
+			s.access.RUnlock()
+		}
 	}
-	this.access.Lock()
-	defer this.access.Unlock()
-	if this.closed {
-		return
-	}
-	this.closed = true
-	close(this.buffer)
-}
 
-func (this *Stream) Release() {
-	if this.buffer == nil {
-		return
-	}
-	this.Close()
-	this.access.Lock()
-	defer this.access.Unlock()
-	if this.buffer == nil {
-		return
-	}
-	for data := range this.buffer {
+	s.access.Lock()
+	defer s.access.Unlock()
+
+	if s.err || s.close {
 		data.Release()
+		return io.ErrClosedPipe
 	}
-	this.buffer = nil
+
+	if s.data == nil {
+		s.data = data
+	} else {
+		s.data.AppendMulti(data)
+	}
+	s.size += uint64(data.Len())
+	s.notifyWrite()
+
+	return nil
+}
+
+func (s *Stream) notifyRead() {
+	select {
+	case s.readSignal <- true:
+	default:
+	}
+}
+
+func (s *Stream) notifyWrite() {
+	select {
+	case s.writeSignal <- true:
+	default:
+	}
+}
+
+func (s *Stream) Close() {
+	s.access.Lock()
+	s.close = true
+	s.notifyRead()
+	s.notifyWrite()
+	s.access.Unlock()
+}
+
+func (s *Stream) CloseError() {
+	s.access.Lock()
+	s.err = true
+	if s.data != nil {
+		s.data.Release()
+		s.data = nil
+		s.size = 0
+	}
+	s.notifyRead()
+	s.notifyWrite()
+	s.access.Unlock()
 }

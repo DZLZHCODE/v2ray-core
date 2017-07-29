@@ -6,11 +6,11 @@ import (
 	"v2ray.com/core/common/serial"
 )
 
-func (this *Assert) Pointer(value interface{}) *PointerSubject {
+func (v *Assert) Pointer(value interface{}) *PointerSubject {
 	return &PointerSubject{
 		Subject: Subject{
-			a:    this,
-			disp: serial.PointerToString(value),
+			a:    v,
+			disp: serial.ToString(value),
 		},
 		value: value,
 	}
@@ -23,7 +23,7 @@ type PointerSubject struct {
 
 func (subject *PointerSubject) Equals(expectation interface{}) {
 	if subject.value != expectation {
-		subject.Fail("is equal to", serial.PointerToString(expectation))
+		subject.Fail("is equal to", serial.ToString(expectation))
 	}
 }
 

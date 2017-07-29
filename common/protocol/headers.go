@@ -1,68 +1,100 @@
 package protocol
 
 import (
-	v2net "v2ray.com/core/common/net"
+	"runtime"
+
+	"v2ray.com/core/common/net"
 	"v2ray.com/core/common/uuid"
 )
 
+// RequestCommand is a custom command in a proxy request.
 type RequestCommand byte
 
 const (
 	RequestCommandTCP = RequestCommand(0x01)
 	RequestCommandUDP = RequestCommand(0x02)
+	RequestCommandMux = RequestCommand(0x03)
 )
 
+func (c RequestCommand) TransferType() TransferType {
+	if c == RequestCommandTCP {
+		return TransferTypeStream
+	}
+
+	return TransferTypePacket
+}
+
+// RequestOption is the options of a request.
 type RequestOption byte
 
 const (
-	RequestOptionChunkStream     = RequestOption(0x01)
+	// RequestOptionChunkStream indicates request payload is chunked. Each chunk consists of length, authentication and payload.
+	RequestOptionChunkStream = RequestOption(0x01)
+
+	// RequestOptionConnectionReuse indicates client side expects to reuse the connection.
 	RequestOptionConnectionReuse = RequestOption(0x02)
+
+	RequestOptionChunkMasking = RequestOption(0x04)
 )
 
-func (this RequestOption) Has(option RequestOption) bool {
-	return (this & option) == option
+func (v RequestOption) Has(option RequestOption) bool {
+	return (v & option) == option
 }
 
-func (this *RequestOption) Set(option RequestOption) {
-	*this = (*this | option)
+func (v *RequestOption) Set(option RequestOption) {
+	*v = (*v | option)
 }
 
-func (this *RequestOption) Clear(option RequestOption) {
-	*this = (*this & (^option))
+func (v *RequestOption) Clear(option RequestOption) {
+	*v = (*v & (^option))
+}
+
+type Security byte
+
+func (v Security) Is(t SecurityType) bool {
+	return v == Security(t)
+}
+
+func NormSecurity(s Security) Security {
+	if s.Is(SecurityType_UNKNOWN) {
+		return Security(SecurityType_LEGACY)
+	}
+	return s
 }
 
 type RequestHeader struct {
-	Version byte
-	User    *User
-	Command RequestCommand
-	Option  RequestOption
-	Address v2net.Address
-	Port    v2net.Port
+	Version  byte
+	Command  RequestCommand
+	Option   RequestOption
+	Security Security
+	Port     net.Port
+	Address  net.Address
+	User     *User
 }
 
-func (this *RequestHeader) Destination() v2net.Destination {
-	if this.Command == RequestCommandUDP {
-		return v2net.UDPDestination(this.Address, this.Port)
+func (v *RequestHeader) Destination() net.Destination {
+	if v.Command == RequestCommandUDP {
+		return net.UDPDestination(v.Address, v.Port)
 	}
-	return v2net.TCPDestination(this.Address, this.Port)
+	return net.TCPDestination(v.Address, v.Port)
 }
 
 type ResponseOption byte
 
 const (
-	ResponseOptionConnectionReuse = ResponseOption(1)
+	ResponseOptionConnectionReuse = ResponseOption(0x01)
 )
 
-func (this *ResponseOption) Set(option ResponseOption) {
-	*this = (*this | option)
+func (v *ResponseOption) Set(option ResponseOption) {
+	*v = (*v | option)
 }
 
-func (this ResponseOption) Has(option ResponseOption) bool {
-	return (this | option) == option
+func (v ResponseOption) Has(option ResponseOption) bool {
+	return (v & option) == option
 }
 
-func (this *ResponseOption) Clear(option ResponseOption) {
-	*this = (*this & (^option))
+func (v *ResponseOption) Clear(option ResponseOption) {
+	*v = (*v & (^option))
 }
 
 type ResponseCommand interface{}
@@ -73,10 +105,23 @@ type ResponseHeader struct {
 }
 
 type CommandSwitchAccount struct {
-	Host     v2net.Address
-	Port     v2net.Port
+	Host     net.Address
+	Port     net.Port
 	ID       *uuid.UUID
 	AlterIds uint16
-	Level    UserLevel
+	Level    uint32
 	ValidMin byte
+}
+
+func (v *SecurityConfig) AsSecurity() Security {
+	if v == nil {
+		return Security(SecurityType_LEGACY)
+	}
+	if v.Type == SecurityType_AUTO {
+		if runtime.GOARCH == "amd64" || runtime.GOARCH == "s390x" {
+			return Security(SecurityType_AES128_GCM)
+		}
+		return Security(SecurityType_CHACHA20_POLY1305)
+	}
+	return NormSecurity(Security(v.Type))
 }

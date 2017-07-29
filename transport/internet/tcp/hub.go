@@ -1,32 +1,28 @@
 package tcp
 
 import (
-	"errors"
+	"context"
+	gotls "crypto/tls"
 	"net"
-	"sync"
-	"time"
 
+	"v2ray.com/core/app/log"
+	"v2ray.com/core/common"
 	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/common/retry"
 	"v2ray.com/core/transport/internet"
+	"v2ray.com/core/transport/internet/tls"
 )
-
-var (
-	ErrClosedListener = errors.New("Listener is closed.")
-)
-
-type ConnectionWithError struct {
-	conn net.Conn
-	err  error
-}
 
 type TCPListener struct {
-	sync.Mutex
-	acccepting    bool
-	listener      *net.TCPListener
-	awaitingConns chan *ConnectionWithError
+	ctx        context.Context
+	listener   *net.TCPListener
+	tlsConfig  *gotls.Config
+	authConfig internet.ConnectionAuthenticator
+	config     *Config
+	addConn    internet.AddConnection
 }
 
-func ListenTCP(address v2net.Address, port v2net.Port) (internet.Listener, error) {
+func ListenTCP(ctx context.Context, address v2net.Address, port v2net.Port, addConn internet.AddConnection) (internet.Listener, error) {
 	listener, err := net.ListenTCP("tcp", &net.TCPAddr{
 		IP:   address.IP(),
 		Port: int(port),
@@ -34,126 +30,77 @@ func ListenTCP(address v2net.Address, port v2net.Port) (internet.Listener, error
 	if err != nil {
 		return nil, err
 	}
+	log.Trace(newError("listening TCP on ", address, ":", port))
+	networkSettings := internet.TransportSettingsFromContext(ctx)
+	tcpSettings := networkSettings.(*Config)
+
 	l := &TCPListener{
-		acccepting:    true,
-		listener:      listener,
-		awaitingConns: make(chan *ConnectionWithError, 32),
+		ctx:      ctx,
+		listener: listener,
+		config:   tcpSettings,
+		addConn:  addConn,
+	}
+	if securitySettings := internet.SecuritySettingsFromContext(ctx); securitySettings != nil {
+		tlsConfig, ok := securitySettings.(*tls.Config)
+		if ok {
+			l.tlsConfig = tlsConfig.GetTLSConfig()
+		}
+	}
+	if tcpSettings.HeaderSettings != nil {
+		headerConfig, err := tcpSettings.HeaderSettings.GetInstance()
+		if err != nil {
+			return nil, newError("invalid header settings").Base(err).AtError()
+		}
+		auth, err := internet.CreateConnectionAuthenticator(headerConfig)
+		if err != nil {
+			return nil, newError("invalid header settings.").Base(err).AtError()
+		}
+		l.authConfig = auth
 	}
 	go l.KeepAccepting()
 	return l, nil
 }
 
-func (this *TCPListener) Accept() (internet.Connection, error) {
-	for this.acccepting {
+func (v *TCPListener) KeepAccepting() {
+	for {
 		select {
-		case connErr, open := <-this.awaitingConns:
-			if !open {
-				return nil, ErrClosedListener
-			}
-			if connErr.err != nil {
-				return nil, connErr.err
-			}
-			return NewConnection("", connErr.conn, this), nil
-		case <-time.After(time.Second * 2):
-		}
-	}
-	return nil, ErrClosedListener
-}
-
-func (this *TCPListener) KeepAccepting() {
-	for this.acccepting {
-		conn, err := this.listener.Accept()
-		this.Lock()
-		if !this.acccepting {
-			this.Unlock()
-			break
-		}
-		select {
-		case this.awaitingConns <- &ConnectionWithError{
-			conn: conn,
-			err:  err,
-		}:
+		case <-v.ctx.Done():
+			return
 		default:
-			if conn != nil {
-				conn.Close()
+		}
+		var conn net.Conn
+		err := retry.ExponentialBackoff(5, 200).On(func() error {
+			rawConn, err := v.listener.Accept()
+			if err != nil {
+				return err
 			}
+			conn = rawConn
+			return nil
+		})
+		if err != nil {
+			log.Trace(newError("failed to accepted raw connections").Base(err).AtWarning())
+			continue
 		}
 
-		this.Unlock()
-	}
-}
-
-func (this *TCPListener) Recycle(dest string, conn net.Conn) {
-	this.Lock()
-	defer this.Unlock()
-	if !this.acccepting {
-		return
-	}
-	select {
-	case this.awaitingConns <- &ConnectionWithError{conn: conn}:
-	default:
-		conn.Close()
-	}
-}
-
-func (this *TCPListener) Addr() net.Addr {
-	return this.listener.Addr()
-}
-
-func (this *TCPListener) Close() error {
-	this.Lock()
-	defer this.Unlock()
-	this.acccepting = false
-	this.listener.Close()
-	close(this.awaitingConns)
-	for connErr := range this.awaitingConns {
-		if connErr.conn != nil {
-			go connErr.conn.Close()
+		if v.tlsConfig != nil {
+			conn = tls.Server(conn, v.tlsConfig)
 		}
+		if v.authConfig != nil {
+			conn = v.authConfig.Server(conn)
+		}
+
+		v.addConn(context.Background(), internet.Connection(conn))
 	}
-	return nil
 }
 
-type RawTCPListener struct {
-	accepting bool
-	listener  *net.TCPListener
+func (v *TCPListener) Addr() net.Addr {
+	return v.listener.Addr()
 }
 
-func (this *RawTCPListener) Accept() (internet.Connection, error) {
-	conn, err := this.listener.AcceptTCP()
-	if err != nil {
-		return nil, err
-	}
-	return &RawConnection{
-		TCPConn: *conn,
-	}, nil
-}
-
-func (this *RawTCPListener) Addr() net.Addr {
-	return this.listener.Addr()
-}
-
-func (this *RawTCPListener) Close() error {
-	this.accepting = false
-	this.listener.Close()
-	return nil
-}
-
-func ListenRawTCP(address v2net.Address, port v2net.Port) (internet.Listener, error) {
-	listener, err := net.ListenTCP("tcp", &net.TCPAddr{
-		IP:   address.IP(),
-		Port: int(port),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &RawTCPListener{
-		accepting: true,
-		listener:  listener,
-	}, nil
+func (v *TCPListener) Close() error {
+	return v.listener.Close()
 }
 
 func init() {
-	internet.TCPListenFunc = ListenTCP
-	internet.RawTCPListenFunc = ListenRawTCP
+	common.Must(internet.RegisterTransportListener(internet.TransportProtocol_TCP, ListenTCP))
 }

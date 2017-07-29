@@ -1,17 +1,23 @@
 package encoding
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/md5"
 	"crypto/rand"
 	"hash/fnv"
 	"io"
 
+	"golang.org/x/crypto/chacha20poly1305"
+
+	"v2ray.com/core/app/log"
+	"v2ray.com/core/common/buf"
 	"v2ray.com/core/common/crypto"
-	"v2ray.com/core/common/log"
-	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/common/dice"
+	"v2ray.com/core/common/net"
 	"v2ray.com/core/common/protocol"
+	"v2ray.com/core/common/serial"
 	"v2ray.com/core/proxy/vmess"
-	"v2ray.com/core/transport"
 )
 
 func hashTimestamp(t protocol.Timestamp) []byte {
@@ -23,6 +29,7 @@ func hashTimestamp(t protocol.Timestamp) []byte {
 	return bytes
 }
 
+// ClientSession stores connection session info for VMess client.
 type ClientSession struct {
 	requestBodyKey  []byte
 	requestBodyIV   []byte
@@ -33,6 +40,7 @@ type ClientSession struct {
 	idHash          protocol.IDHash
 }
 
+// NewClientSession creates a new ClientSession.
 func NewClientSession(idHash protocol.IDHash) *ClientSession {
 	randomBytes := make([]byte, 33) // 16 + 16 + 1
 	rand.Read(randomBytes)
@@ -50,29 +58,50 @@ func NewClientSession(idHash protocol.IDHash) *ClientSession {
 	return session
 }
 
-func (this *ClientSession) EncodeRequestHeader(header *protocol.RequestHeader, writer io.Writer) {
+func (v *ClientSession) EncodeRequestHeader(header *protocol.RequestHeader, writer io.Writer) {
 	timestamp := protocol.NewTimestampGenerator(protocol.NowTime(), 30)()
-	idHash := this.idHash(header.User.Account.(*vmess.Account).AnyValidID().Bytes())
+	account, err := header.User.GetTypedAccount()
+	if err != nil {
+		log.Trace(newError("failed to get user account: ", err).AtError())
+		return
+	}
+	idHash := v.idHash(account.(*vmess.InternalAccount).AnyValidID().Bytes())
 	idHash.Write(timestamp.Bytes(nil))
 	writer.Write(idHash.Sum(nil))
 
 	buffer := make([]byte, 0, 512)
 	buffer = append(buffer, Version)
-	buffer = append(buffer, this.requestBodyIV...)
-	buffer = append(buffer, this.requestBodyKey...)
-	buffer = append(buffer, this.responseHeader, byte(header.Option), byte(0), byte(0), byte(header.Command))
-	buffer = header.Port.Bytes(buffer)
+	buffer = append(buffer, v.requestBodyIV...)
+	buffer = append(buffer, v.requestBodyKey...)
+	buffer = append(buffer, v.responseHeader, byte(header.Option))
+	padingLen := dice.Roll(16)
+	if header.Security.Is(protocol.SecurityType_LEGACY) {
+		// Disable padding in legacy mode for a smooth transition.
+		padingLen = 0
+	}
+	security := byte(padingLen<<4) | byte(header.Security)
+	buffer = append(buffer, security, byte(0), byte(header.Command))
 
-	switch header.Address.Family() {
-	case v2net.AddressFamilyIPv4:
-		buffer = append(buffer, AddrTypeIPv4)
-		buffer = append(buffer, header.Address.IP()...)
-	case v2net.AddressFamilyIPv6:
-		buffer = append(buffer, AddrTypeIPv6)
-		buffer = append(buffer, header.Address.IP()...)
-	case v2net.AddressFamilyDomain:
-		buffer = append(buffer, AddrTypeDomain, byte(len(header.Address.Domain())))
-		buffer = append(buffer, header.Address.Domain()...)
+	if header.Command != protocol.RequestCommandMux {
+		buffer = header.Port.Bytes(buffer)
+
+		switch header.Address.Family() {
+		case net.AddressFamilyIPv4:
+			buffer = append(buffer, AddrTypeIPv4)
+			buffer = append(buffer, header.Address.IP()...)
+		case net.AddressFamilyIPv6:
+			buffer = append(buffer, AddrTypeIPv6)
+			buffer = append(buffer, header.Address.IP()...)
+		case net.AddressFamilyDomain:
+			buffer = append(buffer, AddrTypeDomain, byte(len(header.Address.Domain())))
+			buffer = append(buffer, header.Address.Domain()...)
+		}
+	}
+
+	if padingLen > 0 {
+		pading := make([]byte, padingLen)
+		rand.Read(pading)
+		buffer = append(buffer, pading...)
 	}
 
 	fnv1a := fnv.New32a()
@@ -83,34 +112,95 @@ func (this *ClientSession) EncodeRequestHeader(header *protocol.RequestHeader, w
 	timestampHash := md5.New()
 	timestampHash.Write(hashTimestamp(timestamp))
 	iv := timestampHash.Sum(nil)
-	account := header.User.Account.(*vmess.Account)
-	aesStream := crypto.NewAesEncryptionStream(account.ID.CmdKey(), iv)
+	aesStream := crypto.NewAesEncryptionStream(account.(*vmess.InternalAccount).ID.CmdKey(), iv)
 	aesStream.XORKeyStream(buffer, buffer)
 	writer.Write(buffer)
 
 	return
 }
 
-func (this *ClientSession) EncodeRequestBody(writer io.Writer) io.Writer {
-	aesStream := crypto.NewAesEncryptionStream(this.requestBodyKey, this.requestBodyIV)
-	return crypto.NewCryptionWriter(aesStream, writer)
+func (v *ClientSession) EncodeRequestBody(request *protocol.RequestHeader, writer io.Writer) buf.Writer {
+	var sizeParser crypto.ChunkSizeEncoder = crypto.PlainChunkSizeParser{}
+	if request.Option.Has(protocol.RequestOptionChunkMasking) {
+		sizeParser = NewShakeSizeParser(v.requestBodyIV)
+	}
+	if request.Security.Is(protocol.SecurityType_NONE) {
+		if request.Option.Has(protocol.RequestOptionChunkStream) {
+			if request.Command == protocol.RequestCommandTCP {
+				return crypto.NewChunkStreamWriter(sizeParser, writer)
+			}
+			auth := &crypto.AEADAuthenticator{
+				AEAD:                    new(NoOpAuthenticator),
+				NonceGenerator:          crypto.NoOpBytesGenerator{},
+				AdditionalDataGenerator: crypto.NoOpBytesGenerator{},
+			}
+			return crypto.NewAuthenticationWriter(auth, sizeParser, writer, protocol.TransferTypePacket)
+		}
+
+		return buf.NewWriter(writer)
+	}
+
+	if request.Security.Is(protocol.SecurityType_LEGACY) {
+		aesStream := crypto.NewAesEncryptionStream(v.requestBodyKey, v.requestBodyIV)
+		cryptionWriter := crypto.NewCryptionWriter(aesStream, writer)
+		if request.Option.Has(protocol.RequestOptionChunkStream) {
+			auth := &crypto.AEADAuthenticator{
+				AEAD:                    new(FnvAuthenticator),
+				NonceGenerator:          crypto.NoOpBytesGenerator{},
+				AdditionalDataGenerator: crypto.NoOpBytesGenerator{},
+			}
+			return crypto.NewAuthenticationWriter(auth, sizeParser, cryptionWriter, request.Command.TransferType())
+		}
+
+		return buf.NewWriter(cryptionWriter)
+	}
+
+	if request.Security.Is(protocol.SecurityType_AES128_GCM) {
+		block, _ := aes.NewCipher(v.requestBodyKey)
+		aead, _ := cipher.NewGCM(block)
+
+		auth := &crypto.AEADAuthenticator{
+			AEAD: aead,
+			NonceGenerator: &ChunkNonceGenerator{
+				Nonce: append([]byte(nil), v.requestBodyIV...),
+				Size:  aead.NonceSize(),
+			},
+			AdditionalDataGenerator: crypto.NoOpBytesGenerator{},
+		}
+		return crypto.NewAuthenticationWriter(auth, sizeParser, writer, request.Command.TransferType())
+	}
+
+	if request.Security.Is(protocol.SecurityType_CHACHA20_POLY1305) {
+		aead, _ := chacha20poly1305.New(GenerateChacha20Poly1305Key(v.requestBodyKey))
+
+		auth := &crypto.AEADAuthenticator{
+			AEAD: aead,
+			NonceGenerator: &ChunkNonceGenerator{
+				Nonce: append([]byte(nil), v.requestBodyIV...),
+				Size:  aead.NonceSize(),
+			},
+			AdditionalDataGenerator: crypto.NoOpBytesGenerator{},
+		}
+		return crypto.NewAuthenticationWriter(auth, sizeParser, writer, request.Command.TransferType())
+	}
+
+	panic("Unknown security type.")
 }
 
-func (this *ClientSession) DecodeResponseHeader(reader io.Reader) (*protocol.ResponseHeader, error) {
-	aesStream := crypto.NewAesDecryptionStream(this.responseBodyKey, this.responseBodyIV)
-	this.responseReader = crypto.NewCryptionReader(aesStream, reader)
+func (c *ClientSession) DecodeResponseHeader(reader io.Reader) (*protocol.ResponseHeader, error) {
+	aesStream := crypto.NewAesDecryptionStream(c.responseBodyKey, c.responseBodyIV)
+	c.responseReader = crypto.NewCryptionReader(aesStream, reader)
 
 	buffer := make([]byte, 256)
 
-	_, err := io.ReadFull(this.responseReader, buffer[:4])
+	_, err := io.ReadFull(c.responseReader, buffer[:4])
 	if err != nil {
-		log.Info("Raw: Failed to read response header: ", err)
+		log.Trace(newError("failed to read response header").Base(err))
 		return nil, err
 	}
 
-	if buffer[0] != this.responseHeader {
-		log.Info("Raw: Unexpected response header. Expecting ", this.responseHeader, " but actually ", buffer[0])
-		return nil, transport.ErrCorruptedPacket
+	if buffer[0] != c.responseHeader {
+		return nil, newError("unexpected response header. Expecting ", int(c.responseHeader), " but actually ", int(buffer[0]))
 	}
 
 	header := &protocol.ResponseHeader{
@@ -118,15 +208,15 @@ func (this *ClientSession) DecodeResponseHeader(reader io.Reader) (*protocol.Res
 	}
 
 	if buffer[2] != 0 {
-		cmdId := buffer[2]
+		cmdID := buffer[2]
 		dataLen := int(buffer[3])
-		_, err := io.ReadFull(this.responseReader, buffer[:dataLen])
+		_, err := io.ReadFull(c.responseReader, buffer[:dataLen])
 		if err != nil {
-			log.Info("Raw: Failed to read response command: ", err)
+			log.Trace(newError("failed to read response command").Base(err))
 			return nil, err
 		}
 		data := buffer[:dataLen]
-		command, err := UnmarshalCommand(cmdId, data)
+		command, err := UnmarshalCommand(cmdID, data)
 		if err == nil {
 			header.Command = command
 		}
@@ -135,6 +225,82 @@ func (this *ClientSession) DecodeResponseHeader(reader io.Reader) (*protocol.Res
 	return header, nil
 }
 
-func (this *ClientSession) DecodeResponseBody(reader io.Reader) io.Reader {
-	return this.responseReader
+func (c *ClientSession) DecodeResponseBody(request *protocol.RequestHeader, reader io.Reader) buf.Reader {
+	var sizeParser crypto.ChunkSizeDecoder = crypto.PlainChunkSizeParser{}
+	if request.Option.Has(protocol.RequestOptionChunkMasking) {
+		sizeParser = NewShakeSizeParser(c.responseBodyIV)
+	}
+	if request.Security.Is(protocol.SecurityType_NONE) {
+		if request.Option.Has(protocol.RequestOptionChunkStream) {
+			if request.Command == protocol.RequestCommandTCP {
+				return crypto.NewChunkStreamReader(sizeParser, reader)
+			}
+
+			auth := &crypto.AEADAuthenticator{
+				AEAD:                    new(NoOpAuthenticator),
+				NonceGenerator:          crypto.NoOpBytesGenerator{},
+				AdditionalDataGenerator: crypto.NoOpBytesGenerator{},
+			}
+
+			return crypto.NewAuthenticationReader(auth, sizeParser, reader, protocol.TransferTypePacket)
+		}
+
+		return buf.NewReader(reader)
+	}
+
+	if request.Security.Is(protocol.SecurityType_LEGACY) {
+		if request.Option.Has(protocol.RequestOptionChunkStream) {
+			auth := &crypto.AEADAuthenticator{
+				AEAD:                    new(FnvAuthenticator),
+				NonceGenerator:          crypto.NoOpBytesGenerator{},
+				AdditionalDataGenerator: crypto.NoOpBytesGenerator{},
+			}
+			return crypto.NewAuthenticationReader(auth, sizeParser, c.responseReader, request.Command.TransferType())
+		}
+
+		return buf.NewReader(c.responseReader)
+	}
+
+	if request.Security.Is(protocol.SecurityType_AES128_GCM) {
+		block, _ := aes.NewCipher(c.responseBodyKey)
+		aead, _ := cipher.NewGCM(block)
+
+		auth := &crypto.AEADAuthenticator{
+			AEAD: aead,
+			NonceGenerator: &ChunkNonceGenerator{
+				Nonce: append([]byte(nil), c.responseBodyIV...),
+				Size:  aead.NonceSize(),
+			},
+			AdditionalDataGenerator: crypto.NoOpBytesGenerator{},
+		}
+		return crypto.NewAuthenticationReader(auth, sizeParser, reader, request.Command.TransferType())
+	}
+
+	if request.Security.Is(protocol.SecurityType_CHACHA20_POLY1305) {
+		aead, _ := chacha20poly1305.New(GenerateChacha20Poly1305Key(c.responseBodyKey))
+
+		auth := &crypto.AEADAuthenticator{
+			AEAD: aead,
+			NonceGenerator: &ChunkNonceGenerator{
+				Nonce: append([]byte(nil), c.responseBodyIV...),
+				Size:  aead.NonceSize(),
+			},
+			AdditionalDataGenerator: crypto.NoOpBytesGenerator{},
+		}
+		return crypto.NewAuthenticationReader(auth, sizeParser, reader, request.Command.TransferType())
+	}
+
+	panic("Unknown security type.")
+}
+
+type ChunkNonceGenerator struct {
+	Nonce []byte
+	Size  int
+	count uint16
+}
+
+func (v *ChunkNonceGenerator) Next() []byte {
+	serial.Uint16ToBytes(v.count, v.Nonce[:0])
+	v.count++
+	return v.Nonce[:v.Size]
 }

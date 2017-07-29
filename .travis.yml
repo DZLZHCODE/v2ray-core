@@ -1,39 +1,14 @@
+sudo: required
 language: go
-
 go:
-  - 1.7
-
+- 1.8.3
 go_import_path: v2ray.com/core
-
 git:
   depth: 5
-  
+before_script:
+- sudo ntpdate -u time.google.com
+- date
 script:
-  - go test -tags json v2ray.com/core/...
-
+- go test -p 1 -tags json -v v2ray.com/core/...
 after_success:
-  - ./testing/coverage/coverall
-
-before_deploy:
-  - rvm 1.9.3 do gem install mime-types -v 2.6.2
-  - "./tools/release/release-ci.sh"
-
-deploy:
-  provider: releases
-  api_key: 
-    secure: "FORkI+hXFWSxLkqkBDvo8APQ1XLfuzbOBqhVW474x299AzHpgE/7dYLNo/rQaerYMdmw8gB21tUWOI3FjUYv51x1dO2a2Bu8Por+1BQ+zdUIyS3zJteJ8bAMZGVtg1BCTFjxQsIDMmaziaScSKz3NwEJ1IL8UIBiidFf8EuYyK+EL6yQFodrSeUDsUH52pBO0SBugsAj4lOSTCS25ZcpWYcUMBo7zaD9sNE1Oo8f/bz7cFe4cJLCpazIgkt57IT3u/8BH/EMz4HRbAqj48mjKytp4lm7R3IC8w0ba6yLNXgKqva10B/KNwZQweXqglM5iawQDdSbnIjUnVEe9Oexu8wNV52oBt+8wC7P/ZtAsZTnyWvwIhH2uyhzEHfsM5Up7DnAnaATh/+2upn3lcs4s2p9d/6tIObeIpBvP/3QRNmlmtZFIOnlqkcROj9NQ3IHGbswGiAfBDAsAC8h9CRDy9MtRs6ZbaCih0FLgMzEXi+S50eelNRv4SGaeLlW07cz7uma5C+z+zWb4ZmWsOwWjkOAaFL/zL5O9/w7i4cbXr/sQ6z6YmdDEejbrkHiE8DmKQqeV13xY1FhDqFyEpsdUbftG6pKPt5wcyNEAnw9aPMK7Ec0dAe6vg+oTcfMPAO/rHRXEc4IP56QqdlZTmsZOdDrGgnkRxpbayc+KcvrN28="
-  file:
-    - "$GOPATH/bin/v2ray-macos.zip"
-    - "$GOPATH/bin/v2ray-windows-64.zip"
-    - "$GOPATH/bin/v2ray-windows-32.zip"
-    - "$GOPATH/bin/v2ray-linux-64.zip"
-    - "$GOPATH/bin/v2ray-linux-32.zip"
-    - "$GOPATH/bin/v2ray-linux-arm.zip"
-    - "$GOPATH/bin/v2ray-linux-arm64.zip"
-    - "$GOPATH/bin/v2ray-linux-mips64.zip"
-    - "$GOPATH/bin/v2ray-freebsd-64.zip"
-    - "$GOPATH/bin/v2ray-freebsd-32.zip"
-    - "$GOPATH/bin/metadata.txt"
-  skip_cleanup: true
-  on:
-    tags: true
+- ./testing/coverage/coverall

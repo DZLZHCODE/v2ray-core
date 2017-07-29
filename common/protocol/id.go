@@ -3,7 +3,6 @@ package protocol
 import (
 	"crypto/hmac"
 	"crypto/md5"
-	"errors"
 	"hash"
 
 	"v2ray.com/core/common/uuid"
@@ -11,10 +10,6 @@ import (
 
 const (
 	IDBytesLen = 16
-)
-
-var (
-	InvalidID = errors.New("Invalid ID.")
 )
 
 type IDHash func(key []byte) hash.Hash
@@ -29,20 +24,21 @@ type ID struct {
 	cmdKey [IDBytesLen]byte
 }
 
-func (this *ID) Equals(another *ID) bool {
-	return this.uuid.Equals(another.uuid)
+// Equals returns true if this ID equals to the other one.
+func (v *ID) Equals(another *ID) bool {
+	return v.uuid.Equals(another.uuid)
 }
 
-func (this *ID) Bytes() []byte {
-	return this.uuid.Bytes()
+func (v *ID) Bytes() []byte {
+	return v.uuid.Bytes()
 }
 
-func (this *ID) String() string {
-	return this.uuid.String()
+func (v *ID) String() string {
+	return v.uuid.String()
 }
 
-func (this *ID) UUID() *uuid.UUID {
-	return this.uuid
+func (v *ID) UUID() *uuid.UUID {
+	return v.uuid
 }
 
 func (v ID) CmdKey() []byte {

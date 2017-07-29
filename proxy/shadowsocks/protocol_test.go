@@ -1,136 +1,176 @@
 package shadowsocks_test
 
 import (
-	"io"
 	"testing"
 
-	"v2ray.com/core/common/alloc"
+	"v2ray.com/core/common/buf"
 	v2net "v2ray.com/core/common/net"
-	"v2ray.com/core/proxy"
+	"v2ray.com/core/common/protocol"
+	"v2ray.com/core/common/serial"
 	. "v2ray.com/core/proxy/shadowsocks"
 	"v2ray.com/core/testing/assert"
-	"v2ray.com/core/transport"
 )
 
-func TestNormalRequestParsing(t *testing.T) {
+func TestUDPEncoding(t *testing.T) {
 	assert := assert.On(t)
 
-	buffer := alloc.NewLocalBuffer(2048).Clear()
-	buffer.AppendBytes(1, 127, 0, 0, 1, 0, 80)
+	request := &protocol.RequestHeader{
+		Version: Version,
+		Command: protocol.RequestCommandUDP,
+		Address: v2net.LocalHostIP,
+		Port:    1234,
+		User: &protocol.User{
+			Email: "love@v2ray.com",
+			Account: serial.ToTypedMessage(&Account{
+				Password:   "shadowsocks-password",
+				CipherType: CipherType_AES_128_CFB,
+				Ota:        Account_Disabled,
+			}),
+		},
+	}
 
-	request, err := ReadRequest(buffer, nil, false)
+	data := buf.NewLocal(256)
+	data.AppendSupplier(serial.WriteString("test string"))
+	encodedData, err := EncodeUDPPacket(request, data.Bytes())
 	assert.Error(err).IsNil()
-	assert.Address(request.Address).Equals(v2net.LocalHostIP)
-	assert.Port(request.Port).Equals(v2net.Port(80))
-	assert.Bool(request.OTA).IsFalse()
-}
 
-func TestEmptyPayload(t *testing.T) {
-	assert := assert.On(t)
-
-	buffer := alloc.NewLocalBuffer(2048).Clear()
-	_, err := ReadRequest(buffer, nil, false)
-	assert.Error(err).Equals(io.EOF)
-}
-
-func TestSingleBytePayload(t *testing.T) {
-	assert := assert.On(t)
-
-	buffer := alloc.NewLocalBuffer(2048).Clear().AppendBytes(1)
-	_, err := ReadRequest(buffer, nil, false)
-	assert.Error(err).Equals(transport.ErrCorruptedPacket)
-}
-
-func TestWrongAddressType(t *testing.T) {
-	assert := assert.On(t)
-
-	buffer := alloc.NewLocalBuffer(2048).Clear().AppendBytes(5)
-	_, err := ReadRequest(buffer, nil, false)
-	assert.Error(err).Equals(transport.ErrCorruptedPacket)
-}
-
-func TestInsufficientAddressRequest(t *testing.T) {
-	assert := assert.On(t)
-
-	buffer := alloc.NewLocalBuffer(2048).Clear().AppendBytes(1, 1)
-	_, err := ReadRequest(buffer, nil, false)
-	assert.Error(err).Equals(transport.ErrCorruptedPacket)
-
-	buffer = alloc.NewLocalBuffer(2048).Clear().AppendBytes(4, 1)
-	_, err = ReadRequest(buffer, nil, false)
-	assert.Error(err).Equals(transport.ErrCorruptedPacket)
-
-	buffer = alloc.NewLocalBuffer(2048).Clear().AppendBytes(3, 255, 1)
-	_, err = ReadRequest(buffer, nil, false)
-	assert.Error(err).Equals(transport.ErrCorruptedPacket)
-}
-
-func TestInsufficientPortRequest(t *testing.T) {
-	assert := assert.On(t)
-
-	buffer := alloc.NewLocalBuffer(2048).Clear().AppendBytes(1, 1, 2, 3, 4, 5)
-	_, err := ReadRequest(buffer, nil, false)
-	assert.Error(err).Equals(transport.ErrCorruptedPacket)
-}
-
-func TestOTARequest(t *testing.T) {
-	assert := assert.On(t)
-
-	buffer := alloc.NewLocalBuffer(2048).Clear()
-	buffer.AppendBytes(0x13, 13, 119, 119, 119, 46, 118, 50, 114, 97, 121, 46, 99, 111, 109, 0, 0, 239, 115, 52, 212, 178, 172, 26, 6, 168, 0)
-
-	auth := NewAuthenticator(HeaderKeyGenerator(
-		[]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5},
-		[]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5}))
-	request, err := ReadRequest(buffer, auth, false)
+	decodedRequest, decodedData, err := DecodeUDPPacket(request.User, encodedData)
 	assert.Error(err).IsNil()
-	assert.Address(request.Address).Equals(v2net.DomainAddress("www.v2ray.com"))
-	assert.Bool(request.OTA).IsTrue()
+	assert.Bytes(decodedData.Bytes()).Equals(data.Bytes())
+	assert.Address(decodedRequest.Address).Equals(request.Address)
+	assert.Port(decodedRequest.Port).Equals(request.Port)
 }
 
-func TestInvalidOTARequest(t *testing.T) {
+func TestTCPRequest(t *testing.T) {
 	assert := assert.On(t)
 
-	buffer := alloc.NewLocalBuffer(2048).Clear()
-	buffer.AppendBytes(0x13, 13, 119, 119, 119, 46, 118, 50, 114, 97, 121, 46, 99, 111, 109, 0, 0, 239, 115, 52, 212, 178, 172, 26, 6, 168, 1)
+	cases := []struct {
+		request *protocol.RequestHeader
+		payload []byte
+	}{
+		{
+			request: &protocol.RequestHeader{
+				Version: Version,
+				Command: protocol.RequestCommandTCP,
+				Address: v2net.LocalHostIP,
+				Option:  RequestOptionOneTimeAuth,
+				Port:    1234,
+				User: &protocol.User{
+					Email: "love@v2ray.com",
+					Account: serial.ToTypedMessage(&Account{
+						Password:   "tcp-password",
+						CipherType: CipherType_CHACHA20,
+					}),
+				},
+			},
+			payload: []byte("test string"),
+		},
+		{
+			request: &protocol.RequestHeader{
+				Version: Version,
+				Command: protocol.RequestCommandTCP,
+				Address: v2net.LocalHostIPv6,
+				Option:  RequestOptionOneTimeAuth,
+				Port:    1234,
+				User: &protocol.User{
+					Email: "love@v2ray.com",
+					Account: serial.ToTypedMessage(&Account{
+						Password:   "password",
+						CipherType: CipherType_AES_256_CFB,
+					}),
+				},
+			},
+			payload: []byte("test string"),
+		},
+		{
+			request: &protocol.RequestHeader{
+				Version: Version,
+				Command: protocol.RequestCommandTCP,
+				Address: v2net.DomainAddress("v2ray.com"),
+				Option:  RequestOptionOneTimeAuth,
+				Port:    1234,
+				User: &protocol.User{
+					Email: "love@v2ray.com",
+					Account: serial.ToTypedMessage(&Account{
+						Password:   "password",
+						CipherType: CipherType_CHACHA20_IETF,
+					}),
+				},
+			},
+			payload: []byte("test string"),
+		},
+	}
 
-	auth := NewAuthenticator(HeaderKeyGenerator(
-		[]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5},
-		[]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5}))
-	_, err := ReadRequest(buffer, auth, false)
-	assert.Error(err).Equals(proxy.ErrInvalidAuthentication)
+	runTest := func(request *protocol.RequestHeader, payload []byte) {
+		data := buf.New()
+		defer data.Release()
+		data.Append(payload)
+
+		cache := buf.New()
+		defer cache.Release()
+
+		writer, err := WriteTCPRequest(request, cache)
+		assert.Error(err).IsNil()
+
+		assert.Error(writer.Write(buf.NewMultiBufferValue(data))).IsNil()
+
+		decodedRequest, reader, err := ReadTCPSession(request.User, cache)
+		assert.Error(err).IsNil()
+		assert.Address(decodedRequest.Address).Equals(request.Address)
+		assert.Port(decodedRequest.Port).Equals(request.Port)
+
+		decodedData, err := reader.Read()
+		assert.Error(err).IsNil()
+		assert.String(decodedData[0].String()).Equals(string(payload))
+	}
+
+	for _, test := range cases {
+		runTest(test.request, test.payload)
+	}
+
 }
 
-func TestUDPRequestParsing(t *testing.T) {
+func TestUDPReaderWriter(t *testing.T) {
 	assert := assert.On(t)
 
-	buffer := alloc.NewLocalBuffer(2048).Clear()
-	buffer.AppendBytes(1, 127, 0, 0, 1, 0, 80, 1, 2, 3, 4, 5, 6)
+	user := &protocol.User{
+		Account: serial.ToTypedMessage(&Account{
+			Password:   "test-password",
+			CipherType: CipherType_CHACHA20_IETF,
+		}),
+	}
+	cache := buf.New()
+	writer := buf.NewSequentialWriter(&UDPWriter{
+		Writer: cache,
+		Request: &protocol.RequestHeader{
+			Version: Version,
+			Address: v2net.DomainAddress("v2ray.com"),
+			Port:    123,
+			User:    user,
+			Option:  RequestOptionOneTimeAuth,
+		},
+	})
 
-	request, err := ReadRequest(buffer, nil, true)
+	reader := &UDPReader{
+		Reader: cache,
+		User:   user,
+	}
+
+	b := buf.New()
+	b.AppendSupplier(serial.WriteString("test payload"))
+	err := writer.Write(buf.NewMultiBufferValue(b))
 	assert.Error(err).IsNil()
-	assert.Address(request.Address).Equals(v2net.LocalHostIP)
-	assert.Port(request.Port).Equals(v2net.Port(80))
-	assert.Bool(request.OTA).IsFalse()
-	assert.Bytes(request.UDPPayload.Value).Equals([]byte{1, 2, 3, 4, 5, 6})
-}
 
-func TestUDPRequestWithOTA(t *testing.T) {
-	assert := assert.On(t)
-
-	buffer := alloc.NewLocalBuffer(2048).Clear()
-	buffer.AppendBytes(
-		0x13, 13, 119, 119, 119, 46, 118, 50, 114, 97, 121, 46, 99, 111, 109, 0, 0,
-		1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0,
-		58, 32, 223, 30, 57, 199, 50, 139, 143, 101)
-
-	auth := NewAuthenticator(HeaderKeyGenerator(
-		[]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5},
-		[]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 1, 2, 3, 4, 5}))
-	request, err := ReadRequest(buffer, auth, true)
+	payload, err := reader.Read()
 	assert.Error(err).IsNil()
-	assert.Address(request.Address).Equals(v2net.DomainAddress("www.v2ray.com"))
-	assert.Bool(request.OTA).IsTrue()
-	assert.Bytes(request.UDPPayload.Value).Equals([]byte{
-		1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0})
+	assert.String(payload[0].String()).Equals("test payload")
+
+	b = buf.New()
+	b.AppendSupplier(serial.WriteString("test payload 2"))
+	err = writer.Write(buf.NewMultiBufferValue(b))
+	assert.Error(err).IsNil()
+
+	payload, err = reader.Read()
+	assert.Error(err).IsNil()
+	assert.String(payload[0].String()).Equals("test payload 2")
 }

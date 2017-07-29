@@ -3,14 +3,16 @@ package assert
 import (
 	"bytes"
 
+	"fmt"
+
 	"v2ray.com/core/common/serial"
 )
 
-func (this *Assert) Bytes(value []byte) *BytesSubject {
+func (v *Assert) Bytes(value []byte) *BytesSubject {
 	return &BytesSubject{
 		Subject: Subject{
 			disp: serial.BytesToHexString(value),
-			a:    this,
+			a:    v,
 		},
 		value: value,
 	}
@@ -22,8 +24,15 @@ type BytesSubject struct {
 }
 
 func (subject *BytesSubject) Equals(expectation []byte) {
-	if !bytes.Equal(subject.value, expectation) {
-		subject.Fail("is equal to", serial.BytesToHexString(expectation))
+	if len(subject.value) != len(expectation) {
+		subject.FailWithMessage(fmt.Sprint("Bytes arrays have differen size: expected ", len(expectation), ", actual ", len(subject.value)))
+		return
+	}
+	for idx, b := range expectation {
+		if subject.value[idx] != b {
+			subject.FailWithMessage(fmt.Sprint("Bytes are different: ", b, " vs ", subject.value[idx], " at pos ", idx))
+			return
+		}
 	}
 }
 

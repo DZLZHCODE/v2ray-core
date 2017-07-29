@@ -3,32 +3,38 @@ package outbound
 import (
 	"time"
 
-	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/common/net"
 	"v2ray.com/core/common/protocol"
+	"v2ray.com/core/common/serial"
 	"v2ray.com/core/proxy/vmess"
 )
 
-func (this *VMessOutboundHandler) handleSwitchAccount(cmd *protocol.CommandSwitchAccount) {
-	primary := protocol.NewID(cmd.ID)
-	alters := protocol.NewAlterIDs(primary, cmd.AlterIds)
+func (v *Handler) handleSwitchAccount(cmd *protocol.CommandSwitchAccount) {
 	account := &vmess.Account{
-		ID:       primary,
-		AlterIDs: alters,
+		Id:      cmd.ID.String(),
+		AlterId: uint32(cmd.AlterIds),
+		SecuritySettings: &protocol.SecurityConfig{
+			Type: protocol.SecurityType_LEGACY,
+		},
 	}
-	user := protocol.NewUser(cmd.Level, "")
-	user.Account = account
-	dest := v2net.TCPDestination(cmd.Host, cmd.Port)
+
+	user := &protocol.User{
+		Email:   "",
+		Level:   cmd.Level,
+		Account: serial.ToTypedMessage(account),
+	}
+	dest := net.TCPDestination(cmd.Host, cmd.Port)
 	until := time.Now().Add(time.Duration(cmd.ValidMin) * time.Minute)
-	this.serverList.AddServer(protocol.NewServerSpec(dest, protocol.BeforeTime(until), user))
+	v.serverList.AddServer(protocol.NewServerSpec(dest, protocol.BeforeTime(until), user))
 }
 
-func (this *VMessOutboundHandler) handleCommand(dest v2net.Destination, cmd protocol.ResponseCommand) {
+func (v *Handler) handleCommand(dest net.Destination, cmd protocol.ResponseCommand) {
 	switch typedCommand := cmd.(type) {
 	case *protocol.CommandSwitchAccount:
 		if typedCommand.Host == nil {
-			typedCommand.Host = dest.Address()
+			typedCommand.Host = dest.Address
 		}
-		this.handleSwitchAccount(typedCommand)
+		v.handleSwitchAccount(typedCommand)
 	default:
 	}
 }

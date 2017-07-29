@@ -1,5 +1,9 @@
 #!/bin/bash
 
+if [ -n "${TRAVIS_TAG}" ]; then
+  exit 0
+fi
+
 FAIL=0
 
 V2RAY_OUT=${GOPATH}/out/v2ray
@@ -37,7 +41,7 @@ for OUT_FILE in $(find ${V2RAY_COV} -name "*.out"); do
 done
 
 COV_SORTED=${V2RAY_COV}/coverallsorted.out
-cat ${COVERAGE_FILE} | sort -t: -k1 | grep -vw "testing" > ${COV_SORTED}
+cat ${COVERAGE_FILE} | sort -t: -k1 | grep -vw "testing" | grep -v ".pb.go" | grep -vw "vendor" > ${COV_SORTED}
 echo "mode: set" | cat - ${COV_SORTED} > ${COVERAGE_FILE}
 
 if [ "$FAIL" -eq 0 ]; then

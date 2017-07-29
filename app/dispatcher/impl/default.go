@@ -1,83 +1,142 @@
 package impl
 
+//go:generate go run $GOPATH/src/v2ray.com/core/tools/generrorgen/main.go -pkg impl -path App,Dispatcher,Default
+
 import (
+	"context"
+	"time"
+
 	"v2ray.com/core/app"
+	"v2ray.com/core/app/dispatcher"
+	"v2ray.com/core/app/log"
 	"v2ray.com/core/app/proxyman"
 	"v2ray.com/core/app/router"
-	"v2ray.com/core/common/alloc"
-	"v2ray.com/core/common/log"
-	v2net "v2ray.com/core/common/net"
+	"v2ray.com/core/common"
+	"v2ray.com/core/common/buf"
+	"v2ray.com/core/common/net"
 	"v2ray.com/core/proxy"
 	"v2ray.com/core/transport/ray"
 )
 
+var (
+	errSniffingTimeout = newError("timeout on sniffing")
+)
+
+var (
+	_ app.Application = (*DefaultDispatcher)(nil)
+)
+
+// DefaultDispatcher is a default implementation of Dispatcher.
 type DefaultDispatcher struct {
 	ohm    proxyman.OutboundHandlerManager
-	router router.Router
+	router *router.Router
 }
 
-func NewDefaultDispatcher(space app.Space) *DefaultDispatcher {
+// NewDefaultDispatcher create a new DefaultDispatcher.
+func NewDefaultDispatcher(ctx context.Context, config *dispatcher.Config) (*DefaultDispatcher, error) {
+	space := app.SpaceFromContext(ctx)
+	if space == nil {
+		return nil, newError("no space in context")
+	}
 	d := &DefaultDispatcher{}
-	space.InitializeApplication(func() error {
-		return d.Initialize(space)
+	space.OnInitialize(func() error {
+		d.ohm = proxyman.OutboundHandlerManagerFromSpace(space)
+		if d.ohm == nil {
+			return newError("OutboundHandlerManager is not found in the space")
+		}
+		d.router = router.FromSpace(space)
+		return nil
 	})
-	return d
+	return d, nil
 }
 
-// Private: Used by app.Space only.
-func (this *DefaultDispatcher) Initialize(space app.Space) error {
-	if !space.HasApp(proxyman.APP_ID_OUTBOUND_MANAGER) {
-		log.Error("DefaultDispatcher: OutboundHandlerManager is not found in the space.")
-		return app.ErrMissingApplication
-	}
-	this.ohm = space.GetApp(proxyman.APP_ID_OUTBOUND_MANAGER).(proxyman.OutboundHandlerManager)
-
-	if space.HasApp(router.APP_ID) {
-		this.router = space.GetApp(router.APP_ID).(router.Router)
-	}
-
+// Start implements app.Application.
+func (*DefaultDispatcher) Start() error {
 	return nil
 }
 
-func (this *DefaultDispatcher) Release() {
+// Close implements app.Application.
+func (*DefaultDispatcher) Close() {}
 
+// Interface implements app.Application.
+func (*DefaultDispatcher) Interface() interface{} {
+	return (*dispatcher.Interface)(nil)
 }
 
-func (this *DefaultDispatcher) DispatchToOutbound(meta *proxy.InboundHandlerMeta, session *proxy.SessionInfo) ray.InboundRay {
-	direct := ray.NewRay()
-	dispatcher := this.ohm.GetDefaultHandler()
-	destination := session.Destination
+// Dispatch implements Dispatcher.Interface.
+func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destination) (ray.InboundRay, error) {
+	if !destination.IsValid() {
+		panic("Dispatcher: Invalid destination.")
+	}
+	ctx = proxy.ContextWithTarget(ctx, destination)
 
-	if this.router != nil {
-		if tag, err := this.router.TakeDetour(destination); err == nil {
-			if handler := this.ohm.GetHandler(tag); handler != nil {
-				log.Info("DefaultDispatcher: Taking detour [", tag, "] for [", destination, "].")
-				dispatcher = handler
-			} else {
-				log.Warning("DefaultDispatcher: Nonexisting tag: ", tag)
+	outbound := ray.NewRay(ctx)
+	sniferList := proxyman.ProtocoSniffersFromContext(ctx)
+	if destination.Address.Family().IsDomain() || len(sniferList) == 0 {
+		go d.routedDispatch(ctx, outbound, destination)
+	} else {
+		go func() {
+			domain, err := snifer(ctx, sniferList, outbound)
+			if err == nil {
+				log.Trace(newError("sniffed domain: ", domain))
+				destination.Address = net.ParseAddress(domain)
+				ctx = proxy.ContextWithTarget(ctx, destination)
 			}
-		} else {
-			log.Info("DefaultDispatcher: Default route for ", destination)
+			d.routedDispatch(ctx, outbound, destination)
+		}()
+	}
+	return outbound, nil
+}
+
+func snifer(ctx context.Context, sniferList []proxyman.KnownProtocols, outbound ray.OutboundRay) (string, error) {
+	payload := buf.New()
+	defer payload.Release()
+
+	sniffer := NewSniffer(sniferList)
+	totalAttempt := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+			totalAttempt++
+			if totalAttempt > 5 {
+				return "", errSniffingTimeout
+			}
+			outbound.OutboundInput().Peek(payload)
+			if !payload.IsEmpty() {
+				domain, err := sniffer.Sniff(payload.Bytes())
+				if err != ErrMoreData {
+					return domain, err
+				}
+			}
+			if payload.IsFull() {
+				return "", ErrInvalidData
+			}
+			time.Sleep(time.Millisecond * 100)
 		}
 	}
-
-	if meta.AllowPassiveConnection {
-		go dispatcher.Dispatch(destination, alloc.NewLocalBuffer(32).Clear(), direct)
-	} else {
-		go this.FilterPacketAndDispatch(destination, direct, dispatcher)
-	}
-
-	return direct
 }
 
-// Private: Visible for testing.
-func (this *DefaultDispatcher) FilterPacketAndDispatch(destination v2net.Destination, link ray.OutboundRay, dispatcher proxy.OutboundHandler) {
-	payload, err := link.OutboundInput().Read()
-	if err != nil {
-		log.Info("DefaultDispatcher: No payload towards ", destination, ", stopping now.")
-		link.OutboundInput().Release()
-		link.OutboundOutput().Release()
-		return
+func (d *DefaultDispatcher) routedDispatch(ctx context.Context, outbound ray.OutboundRay, destination net.Destination) {
+	dispatcher := d.ohm.GetDefaultHandler()
+	if d.router != nil {
+		if tag, err := d.router.TakeDetour(ctx); err == nil {
+			if handler := d.ohm.GetHandler(tag); handler != nil {
+				log.Trace(newError("taking detour [", tag, "] for [", destination, "]"))
+				dispatcher = handler
+			} else {
+				log.Trace(newError("nonexisting tag: ", tag).AtWarning())
+			}
+		} else {
+			log.Trace(newError("default route for ", destination))
+		}
 	}
-	dispatcher.Dispatch(destination, payload, link)
+	dispatcher.Dispatch(ctx, outbound)
+}
+
+func init() {
+	common.Must(common.RegisterConfig((*dispatcher.Config)(nil), func(ctx context.Context, config interface{}) (interface{}, error) {
+		return NewDefaultDispatcher(ctx, config.(*dispatcher.Config))
+	}))
 }

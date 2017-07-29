@@ -2,5 +2,16 @@
 {
   "editor.tabSize": 2,
   
-  "go.buildTags": "json"
+  "go.lintTool": "gometalinter",
+  "go.lintFlags": [
+    "--enable-gc"
+  ],
+  "go.formatTool": "goimports",
+
+  "protoc": {
+    "options": [
+      "--proto_path=${env.GOPATH}/src/",
+      "--proto_path=${env.GOPATH}/src/github.com/google/protobuf/src"
+    ]
+  }
 }

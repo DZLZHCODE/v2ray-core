@@ -2,54 +2,65 @@ package net
 
 import (
 	"strings"
-
-	"v2ray.com/core/common/collect"
 )
 
-const (
-	// TCPNetwork represents the TCP network.
-	TCPNetwork = Network("tcp")
-
-	// UDPNetwork represents the UDP network.
-	UDPNetwork = Network("udp")
-
-	// KCPNetwork represents the KCP network.
-	KCPNetwork = Network("kcp")
-
-	// WSNetwork represents the Websocket over HTTP network.
-	WSNetwork = Network("ws")
-)
-
-// Network represents a communication network on internet.
-type Network string
-
-func (this Network) AsList() *NetworkList {
-	list := NetworkList([]Network{this})
-	return &list
-}
-
-func (this Network) String() string {
-	return string(this)
-}
-
-// NetworkList is a list of Networks.
-type NetworkList []Network
-
-// NewNetworkList construsts a NetWorklist from the given StringListeralList.
-func NewNetworkList(networks collect.StringList) NetworkList {
-	list := NetworkList(make([]Network, networks.Len()))
-	for idx, network := range networks {
-		list[idx] = Network(strings.ToLower(strings.TrimSpace(network)))
+func ParseNetwork(nwStr string) Network {
+	if network, found := Network_value[nwStr]; found {
+		return Network(network)
 	}
-	return list
+	switch strings.ToLower(nwStr) {
+	case "tcp":
+		return Network_TCP
+	case "udp":
+		return Network_UDP
+	default:
+		return Network_Unknown
+	}
 }
 
-// HashNetwork returns true if the given network is in this NetworkList.
-func (this *NetworkList) HasNetwork(network Network) bool {
-	for _, value := range *this {
+func (v Network) AsList() *NetworkList {
+	return &NetworkList{
+		Network: []Network{v},
+	}
+}
+
+func (v Network) SystemString() string {
+	switch v {
+	case Network_TCP:
+		return "tcp"
+	case Network_UDP:
+		return "udp"
+	default:
+		return "unknown"
+	}
+}
+
+func (v Network) URLPrefix() string {
+	switch v {
+	case Network_TCP:
+		return "tcp"
+	case Network_UDP:
+		return "udp"
+	default:
+		return "unknown"
+	}
+}
+
+// HasNetwork returns true if the given network is in v NetworkList.
+func (v NetworkList) HasNetwork(network Network) bool {
+	for _, value := range v.Network {
 		if string(value) == string(network) {
 			return true
 		}
 	}
 	return false
+}
+
+func (v NetworkList) Get(idx int) Network {
+	return v.Network[idx]
+}
+
+// Size returns the number of networks in this network list.
+func (v NetworkList) Size() int {
+	return len(v.Network)
 }

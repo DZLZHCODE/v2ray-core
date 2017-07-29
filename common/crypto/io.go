@@ -4,7 +4,7 @@ import (
 	"crypto/cipher"
 	"io"
 
-	"v2ray.com/core/common"
+	"v2ray.com/core/common/buf"
 )
 
 type CryptionReader struct {
@@ -19,27 +19,24 @@ func NewCryptionReader(stream cipher.Stream, reader io.Reader) *CryptionReader {
 	}
 }
 
-func (this *CryptionReader) Read(data []byte) (int, error) {
-	if this.reader == nil {
-		return 0, common.ErrObjectReleased
-	}
-	nBytes, err := this.reader.Read(data)
+func (r *CryptionReader) Read(data []byte) (int, error) {
+	nBytes, err := r.reader.Read(data)
 	if nBytes > 0 {
-		this.stream.XORKeyStream(data[:nBytes], data[:nBytes])
+		r.stream.XORKeyStream(data[:nBytes], data[:nBytes])
 	}
 	return nBytes, err
 }
 
-func (this *CryptionReader) Release() {
-	this.reader = nil
-	this.stream = nil
-}
+var (
+	_ buf.MultiBufferWriter = (*CryptionWriter)(nil)
+)
 
 type CryptionWriter struct {
 	stream cipher.Stream
 	writer io.Writer
 }
 
+// NewCryptionWriter creates a new CryptionWriter.
 func NewCryptionWriter(stream cipher.Stream, writer io.Writer) *CryptionWriter {
 	return &CryptionWriter{
 		stream: stream,
@@ -47,15 +44,17 @@ func NewCryptionWriter(stream cipher.Stream, writer io.Writer) *CryptionWriter {
 	}
 }
 
-func (this *CryptionWriter) Write(data []byte) (int, error) {
-	if this.writer == nil {
-		return 0, common.ErrObjectReleased
-	}
-	this.stream.XORKeyStream(data, data)
-	return this.writer.Write(data)
+// Write implements io.Writer.Write().
+func (w *CryptionWriter) Write(data []byte) (int, error) {
+	w.stream.XORKeyStream(data, data)
+	return w.writer.Write(data)
 }
 
-func (this *CryptionWriter) Release() {
-	this.writer = nil
-	this.stream = nil
+func (w *CryptionWriter) WriteMultiBuffer(mb buf.MultiBuffer) error {
+	bs := mb.ToNetBuffers()
+	for _, b := range bs {
+		w.stream.XORKeyStream(b, b)
+	}
+	_, err := bs.WriteTo(w.writer)
+	return err
 }

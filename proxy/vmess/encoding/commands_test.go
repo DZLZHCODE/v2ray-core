@@ -3,7 +3,7 @@ package encoding_test
 import (
 	"testing"
 
-	"v2ray.com/core/common/alloc"
+	"v2ray.com/core/common/buf"
 	"v2ray.com/core/common/protocol"
 	"v2ray.com/core/common/uuid"
 	. "v2ray.com/core/proxy/vmess/encoding"
@@ -21,11 +21,11 @@ func TestSwitchAccount(t *testing.T) {
 		ValidMin: 16,
 	}
 
-	buffer := alloc.NewBuffer().Clear()
+	buffer := buf.New()
 	err := MarshalCommand(sa, buffer)
 	assert.Error(err).IsNil()
 
-	cmd, err := UnmarshalCommand(1, buffer.Value[2:])
+	cmd, err := UnmarshalCommand(1, buffer.BytesFrom(2))
 	assert.Error(err).IsNil()
 
 	sa2, ok := cmd.(*protocol.CommandSwitchAccount)

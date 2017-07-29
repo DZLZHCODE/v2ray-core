@@ -1,69 +1,69 @@
+// Package proxyman defines applications for manageing inbound and outbound proxies.
 package proxyman
 
+//go:generate go run $GOPATH/src/v2ray.com/core/tools/generrorgen/main.go -pkg proxyman -path App,Proxyman
+
 import (
-	"sync"
+	"context"
 
 	"v2ray.com/core/app"
+	"v2ray.com/core/common/net"
 	"v2ray.com/core/proxy"
-)
-
-const (
-	APP_ID_INBOUND_MANAGER  = app.ID(4)
-	APP_ID_OUTBOUND_MANAGER = app.ID(6)
+	"v2ray.com/core/transport/ray"
 )
 
 type InboundHandlerManager interface {
-	GetHandler(tag string) (proxy.InboundHandler, int)
+	GetHandler(ctx context.Context, tag string) (InboundHandler, error)
+	AddHandler(ctx context.Context, config *InboundHandlerConfig) error
+}
+
+type InboundHandler interface {
+	Start() error
+	Close()
+
+	// For migration
+	GetRandomInboundProxy() (proxy.Inbound, net.Port, int)
 }
 
 type OutboundHandlerManager interface {
-	GetHandler(tag string) proxy.OutboundHandler
-	GetDefaultHandler() proxy.OutboundHandler
+	GetHandler(tag string) OutboundHandler
+	GetDefaultHandler() OutboundHandler
+	AddHandler(ctx context.Context, config *OutboundHandlerConfig) error
 }
 
-type DefaultOutboundHandlerManager struct {
-	sync.RWMutex
-	defaultHandler proxy.OutboundHandler
-	taggedHandler  map[string]proxy.OutboundHandler
+type OutboundHandler interface {
+	Dispatch(ctx context.Context, outboundRay ray.OutboundRay)
 }
 
-func NewDefaultOutboundHandlerManager() *DefaultOutboundHandlerManager {
-	return &DefaultOutboundHandlerManager{
-		taggedHandler: make(map[string]proxy.OutboundHandler),
-	}
-}
-
-func (this *DefaultOutboundHandlerManager) Release() {
-
-}
-
-func (this *DefaultOutboundHandlerManager) GetDefaultHandler() proxy.OutboundHandler {
-	this.RLock()
-	defer this.RUnlock()
-	if this.defaultHandler == nil {
+func InboundHandlerManagerFromSpace(space app.Space) InboundHandlerManager {
+	app := space.GetApplication((*InboundHandlerManager)(nil))
+	if app == nil {
 		return nil
 	}
-	return this.defaultHandler
+	return app.(InboundHandlerManager)
 }
 
-func (this *DefaultOutboundHandlerManager) SetDefaultHandler(handler proxy.OutboundHandler) {
-	this.Lock()
-	defer this.Unlock()
-	this.defaultHandler = handler
+func OutboundHandlerManagerFromSpace(space app.Space) OutboundHandlerManager {
+	app := space.GetApplication((*OutboundHandlerManager)(nil))
+	if app == nil {
+		return nil
+	}
+	return app.(OutboundHandlerManager)
 }
 
-func (this *DefaultOutboundHandlerManager) GetHandler(tag string) proxy.OutboundHandler {
-	this.RLock()
-	defer this.RUnlock()
-	if handler, found := this.taggedHandler[tag]; found {
-		return handler
+type key int
+
+const (
+	protocolsKey key = iota
+)
+
+func ContextWithProtocolSniffers(ctx context.Context, list []KnownProtocols) context.Context {
+	return context.WithValue(ctx, protocolsKey, list)
+}
+
+func ProtocoSniffersFromContext(ctx context.Context) []KnownProtocols {
+	if list, ok := ctx.Value(protocolsKey).([]KnownProtocols); ok {
+		return list
 	}
 	return nil
-}
-
-func (this *DefaultOutboundHandlerManager) SetHandler(tag string, handler proxy.OutboundHandler) {
-	this.Lock()
-	defer this.Unlock()
-
-	this.taggedHandler[tag] = handler
 }

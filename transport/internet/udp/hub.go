@@ -1,31 +1,90 @@
 package udp
 
 import (
+	"context"
 	"net"
-	"sync"
 
-	"v2ray.com/core/common/alloc"
-	"v2ray.com/core/common/log"
+	"v2ray.com/core/app/log"
+	"v2ray.com/core/common/buf"
+	"v2ray.com/core/common/dice"
 	v2net "v2ray.com/core/common/net"
-	"v2ray.com/core/proxy"
 	"v2ray.com/core/transport/internet/internal"
 )
 
-type UDPPayloadHandler func(*alloc.Buffer, *proxy.SessionInfo)
+// Payload represents a single UDP payload.
+type Payload struct {
+	payload      *buf.Buffer
+	source       v2net.Destination
+	originalDest v2net.Destination
+}
 
-type UDPHub struct {
-	sync.RWMutex
-	conn      *net.UDPConn
-	option    ListenOption
-	accepting bool
+// PayloadHandler is function to handle Payload.
+type PayloadHandler func(payload *buf.Buffer, source v2net.Destination, originalDest v2net.Destination)
+
+// PayloadQueue is a queue of Payload.
+type PayloadQueue struct {
+	queue    []chan Payload
+	callback PayloadHandler
+}
+
+// NewPayloadQueue returns a new PayloadQueue.
+func NewPayloadQueue(option ListenOption) *PayloadQueue {
+	queue := &PayloadQueue{
+		callback: option.Callback,
+		queue:    make([]chan Payload, option.Concurrency),
+	}
+	for i := range queue.queue {
+		queue.queue[i] = make(chan Payload, 64)
+		go queue.Dequeue(queue.queue[i])
+	}
+	return queue
+}
+
+func (v *PayloadQueue) Enqueue(payload Payload) {
+	size := len(v.queue)
+	idx := 0
+	if size > 1 {
+		idx = dice.Roll(size)
+	}
+	for i := 0; i < size; i++ {
+		select {
+		case v.queue[idx%size] <- payload:
+			return
+		default:
+			idx++
+		}
+	}
+}
+
+func (v *PayloadQueue) Dequeue(queue <-chan Payload) {
+	for payload := range queue {
+		v.callback(payload.payload, payload.source, payload.originalDest)
+	}
+}
+
+func (v *PayloadQueue) Close() {
+	for _, queue := range v.queue {
+		close(queue)
+	}
 }
 
 type ListenOption struct {
-	Callback            UDPPayloadHandler
+	Callback            PayloadHandler
 	ReceiveOriginalDest bool
+	Concurrency         int
 }
 
-func ListenUDP(address v2net.Address, port v2net.Port, option ListenOption) (*UDPHub, error) {
+type Hub struct {
+	conn   *net.UDPConn
+	cancel context.CancelFunc
+	queue  *PayloadQueue
+	option ListenOption
+}
+
+func ListenUDP(address v2net.Address, port v2net.Port, option ListenOption) (*Hub, error) {
+	if option.Concurrency < 1 {
+		option.Concurrency = 1
+	}
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{
 		IP:   address.IP(),
 		Port: int(port),
@@ -33,79 +92,84 @@ func ListenUDP(address v2net.Address, port v2net.Port, option ListenOption) (*UD
 	if err != nil {
 		return nil, err
 	}
+	log.Trace(newError("listening UDP on ", address, ":", port))
 	if option.ReceiveOriginalDest {
 		fd, err := internal.GetSysFd(udpConn)
 		if err != nil {
-			log.Warning("UDP|Listener: Failed to get fd: ", err)
-			return nil, err
+			return nil, newError("failed to get fd").Base(err)
 		}
 		err = SetOriginalDestOptions(fd)
 		if err != nil {
-			log.Warning("UDP|Listener: Failed to set socket options: ", err)
-			return nil, err
+			return nil, newError("failed to set socket options").Base(err)
 		}
 	}
-	hub := &UDPHub{
+	ctx, cancel := context.WithCancel(context.Background())
+	hub := &Hub{
 		conn:   udpConn,
+		queue:  NewPayloadQueue(option),
 		option: option,
+		cancel: cancel,
 	}
-	go hub.start()
+	go hub.start(ctx)
 	return hub, nil
 }
 
-func (this *UDPHub) Close() {
-	this.Lock()
-	defer this.Unlock()
-
-	this.accepting = false
-	this.conn.Close()
+func (v *Hub) Close() {
+	v.cancel()
+	v.conn.Close()
 }
 
-func (this *UDPHub) WriteTo(payload []byte, dest v2net.Destination) (int, error) {
-	return this.conn.WriteToUDP(payload, &net.UDPAddr{
-		IP:   dest.Address().IP(),
-		Port: int(dest.Port()),
+func (v *Hub) WriteTo(payload []byte, dest v2net.Destination) (int, error) {
+	return v.conn.WriteToUDP(payload, &net.UDPAddr{
+		IP:   dest.Address.IP(),
+		Port: int(dest.Port),
 	})
 }
 
-func (this *UDPHub) start() {
-	this.Lock()
-	this.accepting = true
-	this.Unlock()
-
+func (v *Hub) start(ctx context.Context) {
 	oobBytes := make([]byte, 256)
-	for this.Running() {
-		buffer := alloc.NewBuffer()
-		nBytes, noob, _, addr, err := ReadUDPMsg(this.conn, buffer.Value, oobBytes)
+L:
+	for {
+		select {
+		case <-ctx.Done():
+			break L
+		default:
+		}
+
+		buffer := buf.New()
+		var noob int
+		var addr *net.UDPAddr
+		err := buffer.AppendSupplier(func(b []byte) (int, error) {
+			n, nb, _, a, e := ReadUDPMsg(v.conn, b, oobBytes)
+			noob = nb
+			addr = a
+			return n, e
+		})
+
 		if err != nil {
-			log.Info("UDP|Hub: Failed to read UDP msg: ", err)
+			log.Trace(newError("failed to read UDP msg").Base(err))
 			buffer.Release()
 			continue
 		}
-		buffer.Slice(0, nBytes)
 
-		session := new(proxy.SessionInfo)
-		session.Source = v2net.UDPDestination(v2net.IPAddress(addr.IP), v2net.Port(addr.Port))
-		if this.option.ReceiveOriginalDest && noob > 0 {
-			session.Destination = RetrieveOriginalDest(oobBytes[:noob])
+		payload := Payload{
+			payload: buffer,
 		}
-		go this.option.Callback(buffer, session)
+		payload.source = v2net.UDPDestination(v2net.IPAddress(addr.IP), v2net.Port(addr.Port))
+		if v.option.ReceiveOriginalDest && noob > 0 {
+			payload.originalDest = RetrieveOriginalDest(oobBytes[:noob])
+		}
+		v.queue.Enqueue(payload)
 	}
+	v.queue.Close()
 }
 
-func (this *UDPHub) Running() bool {
-	this.RLock()
-	defer this.RUnlock()
-
-	return this.accepting
-}
-
-// Connection return the net.Conn underneath this hub.
+// Connection returns the net.Conn underneath this hub.
 // Private: Visible for testing only
-func (this *UDPHub) Connection() net.Conn {
-	return this.conn
+func (v *Hub) Connection() net.Conn {
+	return v.conn
 }
 
-func (this *UDPHub) Addr() net.Addr {
-	return this.conn.LocalAddr()
+func (v *Hub) Addr() net.Addr {
+	return v.conn.LocalAddr()
 }

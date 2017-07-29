@@ -1,35 +1,44 @@
 package protocol
 
-type UserLevel byte
+import "time"
 
-const (
-	UserLevelAdmin     = UserLevel(255)
-	UserLevelUntrusted = UserLevel(0)
+var (
+	ErrAccountMissing     = newError("Account is not specified.")
+	ErrNonMessageType     = newError("Not a protobuf message.")
+	ErrUnknownAccountType = newError("Unknown account type.")
 )
 
-type User struct {
-	Account Account
-	Level   UserLevel
-	Email   string
+func (v *User) GetTypedAccount() (Account, error) {
+	if v.GetAccount() == nil {
+		return nil, ErrAccountMissing
+	}
+
+	rawAccount, err := v.Account.GetInstance()
+	if err != nil {
+		return nil, err
+	}
+	if asAccount, ok := rawAccount.(AsAccount); ok {
+		return asAccount.AsAccount()
+	}
+	if account, ok := rawAccount.(Account); ok {
+		return account, nil
+	}
+	return nil, newError("Unknown account type: ", v.Account.Type)
 }
 
-func NewUser(level UserLevel, email string) *User {
-	return &User{
-		Level: level,
-		Email: email,
+func (v *User) GetSettings() UserSettings {
+	settings := UserSettings{}
+	switch v.Level {
+	case 0:
+		settings.PayloadTimeout = time.Second * 30
+	case 1:
+		settings.PayloadTimeout = time.Minute * 2
+	default:
+		settings.PayloadTimeout = time.Minute * 5
 	}
+	return settings
 }
 
 type UserSettings struct {
-	PayloadReadTimeout int
-}
-
-func GetUserSettings(level UserLevel) UserSettings {
-	settings := UserSettings{
-		PayloadReadTimeout: 120,
-	}
-	if level > 0 {
-		settings.PayloadReadTimeout = 0
-	}
-	return settings
+	PayloadTimeout time.Duration
 }

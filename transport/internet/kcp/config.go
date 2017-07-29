@@ -1,73 +1,103 @@
 package kcp
 
 import (
+	"crypto/cipher"
+
+	"v2ray.com/core/common"
 	"v2ray.com/core/transport/internet"
 )
 
-type Config struct {
-	Mtu              uint32 // Maximum transmission unit
-	Tti              uint32
-	UplinkCapacity   uint32
-	DownlinkCapacity uint32
-	Congestion       bool
-	WriteBuffer      uint32
-	ReadBuffer       uint32
-	HeaderType       string
-	HeaderConfig     internet.AuthenticatorConfig
+// GetMTUValue returns the value of MTU settings.
+func (v *Config) GetMTUValue() uint32 {
+	if v == nil || v.Mtu == nil {
+		return 1350
+	}
+	return v.Mtu.Value
 }
 
-func (this *Config) Apply() {
-	effectiveConfig = *this
+// GetTTIValue returns the value of TTI settings.
+func (v *Config) GetTTIValue() uint32 {
+	if v == nil || v.Tti == nil {
+		return 50
+	}
+	return v.Tti.Value
 }
 
-func (this *Config) GetAuthenticator() (internet.Authenticator, error) {
-	auth := NewSimpleAuthenticator()
-	if this.HeaderConfig != nil {
-		header, err := internet.CreateAuthenticator(this.HeaderType, this.HeaderConfig)
+// GetUplinkCapacityValue returns the value of UplinkCapacity settings.
+func (v *Config) GetUplinkCapacityValue() uint32 {
+	if v == nil || v.UplinkCapacity == nil {
+		return 5
+	}
+	return v.UplinkCapacity.Value
+}
+
+// GetDownlinkCapacityValue returns the value of DownlinkCapacity settings.
+func (v *Config) GetDownlinkCapacityValue() uint32 {
+	if v == nil || v.DownlinkCapacity == nil {
+		return 20
+	}
+	return v.DownlinkCapacity.Value
+}
+
+// GetWriteBufferSize returns the size of WriterBuffer in bytes.
+func (v *Config) GetWriteBufferSize() uint32 {
+	if v == nil || v.WriteBuffer == nil {
+		return 2 * 1024 * 1024
+	}
+	return v.WriteBuffer.Size
+}
+
+// GetReadBufferSize returns the size of ReadBuffer in bytes.
+func (v *Config) GetReadBufferSize() uint32 {
+	if v == nil || v.ReadBuffer == nil {
+		return 2 * 1024 * 1024
+	}
+	return v.ReadBuffer.Size
+}
+
+// GetSecurity returns the security settings.
+func (v *Config) GetSecurity() (cipher.AEAD, error) {
+	return NewSimpleAuthenticator(), nil
+}
+
+func (v *Config) GetPackerHeader() (internet.PacketHeader, error) {
+	if v.HeaderConfig != nil {
+		rawConfig, err := v.HeaderConfig.GetInstance()
 		if err != nil {
 			return nil, err
 		}
-		auth = internet.NewAuthenticatorChain(header, auth)
+
+		return internet.CreatePacketHeader(rawConfig)
 	}
-	return auth, nil
+	return nil, nil
 }
 
-func (this *Config) GetSendingInFlightSize() uint32 {
-	size := this.UplinkCapacity * 1024 * 1024 / this.Mtu / (1000 / this.Tti) / 2
+func (v *Config) GetSendingInFlightSize() uint32 {
+	size := v.GetUplinkCapacityValue() * 1024 * 1024 / v.GetMTUValue() / (1000 / v.GetTTIValue())
 	if size < 8 {
 		size = 8
 	}
 	return size
 }
 
-func (this *Config) GetSendingBufferSize() uint32 {
-	return this.GetSendingInFlightSize() + this.WriteBuffer/this.Mtu
+func (v *Config) GetSendingBufferSize() uint32 {
+	return v.GetWriteBufferSize() / v.GetMTUValue()
 }
 
-func (this *Config) GetReceivingInFlightSize() uint32 {
-	size := this.DownlinkCapacity * 1024 * 1024 / this.Mtu / (1000 / this.Tti) / 2
+func (v *Config) GetReceivingInFlightSize() uint32 {
+	size := v.GetDownlinkCapacityValue() * 1024 * 1024 / v.GetMTUValue() / (1000 / v.GetTTIValue())
 	if size < 8 {
 		size = 8
 	}
 	return size
 }
 
-func (this *Config) GetReceivingBufferSize() uint32 {
-	return this.GetReceivingInFlightSize() + this.ReadBuffer/this.Mtu
+func (v *Config) GetReceivingBufferSize() uint32 {
+	return v.GetReadBufferSize() / v.GetMTUValue()
 }
 
-func DefaultConfig() Config {
-	return Config{
-		Mtu:              1350,
-		Tti:              50,
-		UplinkCapacity:   5,
-		DownlinkCapacity: 20,
-		Congestion:       false,
-		WriteBuffer:      1 * 1024 * 1024,
-		ReadBuffer:       1 * 1024 * 1024,
-	}
+func init() {
+	common.Must(internet.RegisterProtocolConfigCreator(internet.TransportProtocol_MKCP, func() interface{} {
+		return new(Config)
+	}))
 }
-
-var (
-	effectiveConfig = DefaultConfig()
-)

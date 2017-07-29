@@ -1,6 +1,7 @@
 package kcp_test
 
 import (
+	"context"
 	"crypto/rand"
 	"io"
 	"net"
@@ -10,42 +11,37 @@ import (
 
 	v2net "v2ray.com/core/common/net"
 	"v2ray.com/core/testing/assert"
+	"v2ray.com/core/transport/internet"
 	. "v2ray.com/core/transport/internet/kcp"
 )
 
 func TestDialAndListen(t *testing.T) {
 	assert := assert.On(t)
 
-	listerner, err := NewListener(v2net.LocalHostIP, v2net.Port(0))
+	listerner, err := NewListener(internet.ContextWithTransportSettings(context.Background(), &Config{}), v2net.LocalHostIP, v2net.Port(0), func(ctx context.Context, conn internet.Connection) bool {
+		go func(c internet.Connection) {
+			payload := make([]byte, 4096)
+			for {
+				nBytes, err := c.Read(payload)
+				if err != nil {
+					break
+				}
+				for idx, b := range payload[:nBytes] {
+					payload[idx] = b ^ 'c'
+				}
+				c.Write(payload[:nBytes])
+			}
+			c.Close()
+		}(conn)
+		return true
+	})
 	assert.Error(err).IsNil()
 	port := v2net.Port(listerner.Addr().(*net.UDPAddr).Port)
 
-	go func() {
-		for {
-			conn, err := listerner.Accept()
-			if err != nil {
-				break
-			}
-			go func() {
-				payload := make([]byte, 4096)
-				for {
-					nBytes, err := conn.Read(payload)
-					if err != nil {
-						break
-					}
-					for idx, b := range payload[:nBytes] {
-						payload[idx] = b ^ 'c'
-					}
-					conn.Write(payload[:nBytes])
-				}
-				conn.Close()
-			}()
-		}
-	}()
-
+	ctx := internet.ContextWithTransportSettings(context.Background(), &Config{})
 	wg := new(sync.WaitGroup)
 	for i := 0; i < 10; i++ {
-		clientConn, err := DialKCP(v2net.LocalHostIP, v2net.UDPDestination(v2net.LocalHostIP, port))
+		clientConn, err := DialKCP(ctx, v2net.UDPDestination(v2net.LocalHostIP, port))
 		assert.Error(err).IsNil()
 		wg.Add(1)
 
@@ -70,7 +66,9 @@ func TestDialAndListen(t *testing.T) {
 	}
 
 	wg.Wait()
-	time.Sleep(15 * time.Second)
+	for i := 0; i < 60 && listerner.ActiveConnections() > 0; i++ {
+		time.Sleep(500 * time.Millisecond)
+	}
 	assert.Int(listerner.ActiveConnections()).Equals(0)
 
 	listerner.Close()

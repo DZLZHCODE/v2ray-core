@@ -4,10 +4,10 @@ import (
 	"strings"
 )
 
-func (this *Assert) String(value string) *StringSubject {
+func (v *Assert) String(value string) *StringSubject {
 	return &StringSubject{
 		Subject: Subject{
-			a:    this,
+			a:    v,
 			disp: value,
 		},
 		value: value,
@@ -40,5 +40,11 @@ func (subject *StringSubject) Contains(substring string) {
 func (subject *StringSubject) NotContains(substring string) {
 	if strings.Contains(subject.value, substring) {
 		subject.Fail("doesn't contain", substring)
+	}
+}
+
+func (subject *StringSubject) IsEmpty() {
+	if len(subject.value) > 0 {
+		subject.FailWithMessage("is not empty.")
 	}
 }
